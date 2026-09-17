@@ -26,6 +26,12 @@ pub enum GrabMode {
     Uniq,
     /// `GRAB_JOB`: no unique id, for libgearman-parity testing.
     Plain,
+    /// `GRAB_JOB_ALL`: like `Uniq`, but also receives the reducer name for
+    /// jobs submitted via `submit_reduce_job`. The server replies
+    /// `JOB_ASSIGN_ALL` for jobs that have a reducer and plain
+    /// `JOB_ASSIGN_UNIQ` for ones that don't — both are handled the same
+    /// way here, just with `WorkerJob::reducer` set or `None`.
+    All,
 }
 
 pub struct WorkerBuilder {
@@ -262,6 +268,7 @@ async fn run_grab_loop(
         let grab_type = match grab_mode {
             GrabMode::Uniq => PacketType::GrabJobUniq,
             GrabMode::Plain => PacketType::GrabJob,
+            GrabMode::All => PacketType::GrabJobAll,
         };
         if send_packet(conn, Packet::request(grab_type, vec![]))
             .await
@@ -276,7 +283,9 @@ async fn run_grab_loop(
         };
 
         match response.ptype {
-            PacketType::JobAssign | PacketType::JobAssignUniq => {
+            PacketType::JobAssign
+            | PacketType::JobAssignUniq
+            | PacketType::JobAssignAll => {
                 dispatch_job(conn, registry, response).await;
             }
             PacketType::NoJob => {
@@ -315,12 +324,18 @@ async fn dispatch_job(
 ) {
     let handle = pkt.arg_str(0).unwrap_or_default().to_string();
     let function = pkt.arg_str(1).unwrap_or_default().to_string();
-    let (unique, payload) = match pkt.ptype {
+    let (unique, reducer, payload) = match pkt.ptype {
+        PacketType::JobAssignAll => (
+            pkt.arg_str(2).map(str::to_string),
+            pkt.arg_str(3).map(str::to_string),
+            pkt.args.get(4).cloned().unwrap_or_default(),
+        ),
         PacketType::JobAssignUniq => (
             pkt.arg_str(2).map(str::to_string),
+            None,
             pkt.args.get(3).cloned().unwrap_or_default(),
         ),
-        _ => (None, pkt.args.get(2).cloned().unwrap_or_default()),
+        _ => (None, None, pkt.args.get(2).cloned().unwrap_or_default()),
     };
 
     let Some(reg) = registry.get(&function) else {
@@ -344,6 +359,7 @@ async fn dispatch_job(
         handle: handle.clone(),
         function,
         unique,
+        reducer,
         payload,
         reporter,
     };

@@ -117,9 +117,16 @@ impl From<PacketType> for u32 {
 impl PacketType {
     /// Number of NUL-separated arguments this packet type's payload carries.
     /// The last argument is always opaque (may itself contain NUL bytes);
-    /// earlier arguments are split on the first NUL. Field layouts are from
-    /// the inline comments in `libgearman-1.0/protocol.h` and the `PROTOCOL`
-    /// file's admin/binary sections.
+    /// earlier arguments are split on the first NUL. Field layouts are
+    /// cross-checked against `libgearman/command.cc`'s
+    /// `gearmand_command_info_list` (each entry's declared `argc` is the
+    /// number of NUL-delimited fields; its `data` flag means one further
+    /// opaque, unterminated field follows — so the total field count here
+    /// is `argc + (data ? 1 : 0)`), not just the `libgearman-1.0/
+    /// protocol.h` inline comments, which read as slightly ambiguous for
+    /// `SUBMIT_REDUCE_JOB[_BACKGROUND]` (`argc=4, data=true`, i.e. 5 total:
+    /// `FUNC\0UNIQ\0REDUCER\0UNUSED\0ARGS` — the `UNUSED` field is real on
+    /// the wire, just never read by the server's reduce-job handler).
     pub fn arg_count(self) -> usize {
         use PacketType::*;
         match self {

@@ -17,7 +17,7 @@ implemented so far.
 | Admin text protocol | done |
 | TLS | done |
 | `SUBMIT_JOB_EPOCH` | done |
-| `SUBMIT_REDUCE_JOB*` / `GRAB_JOB_ALL` | planned (stretch) |
+| `SUBMIT_REDUCE_JOB*` / `GRAB_JOB_ALL` | done |
 | `SUBMIT_JOB_SCHED` | not planned — unused by gearmand itself |
 
 The protocol reference used to build this crate is the `PROTOCOL` file in

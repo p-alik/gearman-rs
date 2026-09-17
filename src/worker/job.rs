@@ -26,6 +26,12 @@ pub struct WorkerJob {
     pub handle: String,
     pub function: String,
     pub unique: Option<String>,
+    /// Set only when grabbed via `GrabMode::All` for a job submitted
+    /// through `Client::submit_reduce_job` with a reducer name. gearmand
+    /// itself doesn't interpret this — it's an opaque passthrough field the
+    /// handler can use however it wants (e.g. to select a reduction
+    /// strategy).
+    pub reducer: Option<String>,
     pub payload: Bytes,
     pub reporter: Reporter,
 }

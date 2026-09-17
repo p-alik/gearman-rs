@@ -153,6 +153,33 @@ impl Client {
         Ok(submitted.handle)
     }
 
+    /// Submits a job with a reducer name attached (`SUBMIT_REDUCE_JOB[_BACKGROUND]`).
+    /// gearmand only forwards the reducer name to workers that grab with
+    /// `GrabMode::All` (`WorkerJob::reducer`) — it implements no reduction
+    /// logic itself, this is purely an opaque passthrough field.
+    pub async fn submit_reduce_job(
+        &self,
+        function: &str,
+        unique: Option<&str>,
+        reducer: &str,
+        payload: impl Into<Bytes>,
+        background: bool,
+    ) -> Result<SubmittedJob> {
+        let ptype = if background {
+            PacketType::SubmitReduceJobBackground
+        } else {
+            PacketType::SubmitReduceJob
+        };
+        let args = vec![
+            Bytes::copy_from_slice(function.as_bytes()),
+            Bytes::from(unique.unwrap_or("").to_string()),
+            Bytes::copy_from_slice(reducer.as_bytes()),
+            Bytes::new(), // UNUSED: a real field on the wire, ignored by the server
+            payload.into(),
+        ];
+        self.submit_packet(ptype, args, unique, background).await
+    }
+
     async fn submit_packet(
         &self,
         ptype: PacketType,

@@ -9,8 +9,9 @@ mod common;
 use std::time::Duration;
 
 use bytes::Bytes;
-use gearman::client::ClientBuilder;
-use gearman::worker::{WorkError, WorkerBuilder, WorkerJob};
+use futures::StreamExt;
+use gearman::client::{ClientBuilder, JobEvent};
+use gearman::worker::{GrabMode, WorkError, WorkerBuilder, WorkerJob};
 use gearman::GearmanError;
 
 async fn reverse(job: WorkerJob) -> Result<Bytes, WorkError> {
@@ -183,4 +184,56 @@ async fn worker_shutdown_returns_promptly_with_no_job_in_flight() {
     tokio::time::timeout(Duration::from_secs(2), worker.shutdown())
         .await
         .expect("shutdown should not hang once idle");
+}
+
+async fn echo_reducer(job: WorkerJob) -> Result<Bytes, WorkError> {
+    Ok(Bytes::from(job.reducer.unwrap_or_default()))
+}
+
+#[tokio::test]
+async fn reduce_job_forwards_reducer_name_to_worker() {
+    let _ = tracing_subscriber::fmt::try_init();
+
+    let Some(gearmand) = common::GearmandProcess::start() else {
+        return;
+    };
+
+    let worker = WorkerBuilder::new()
+        .servers([gearmand.addr.clone()])
+        .concurrency(1)
+        .grab_mode(GrabMode::All)
+        .register("echo_reducer", echo_reducer)
+        .run();
+
+    let client = ClientBuilder::new()
+        .servers([gearmand.addr.clone()])
+        .connect()
+        .await
+        .expect("client should connect");
+    settle().await;
+
+    let submitted = client
+        .submit_reduce_job(
+            "echo_reducer",
+            None,
+            "my-reducer",
+            Bytes::from_static(b"test"),
+            false,
+        )
+        .await
+        .expect("reduce job submit should succeed");
+
+    let mut events = submitted
+        .events
+        .expect("foreground reduce job registers an event stream");
+    let result = loop {
+        match events.next().await {
+            Some(JobEvent::Complete(payload)) => break payload,
+            Some(_) => continue,
+            None => panic!("connection closed before job completed"),
+        }
+    };
+    assert_eq!(result.as_ref(), b"my-reducer");
+
+    worker.shutdown().await;
 }
