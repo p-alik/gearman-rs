@@ -1,5 +1,7 @@
 # gearman
 
+[![codecov](https://codecov.io/gh/p-alik/gearman-rs/graph/badge.svg)](https://codecov.io/gh/p-alik/gearman-rs)
+
 Native async Rust implementation of the [Gearman](http://gearman.org/) binary
 wire protocol — no dependency on the C `libgearman`. Built on
 [tokio](https://tokio.rs/).

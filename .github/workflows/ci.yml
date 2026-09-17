@@ -45,3 +45,28 @@ jobs:
       # 1.75 MSRV this crate itself and aws-lc-rs/rustls both declare. See
       # README.md#msrv for why we don't chase this upstream.
       - run: cargo check --features client,worker,admin
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: llvm-tools-preview }
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # Same real gearmand as the `test` job, so integration tests
+      # contribute real coverage instead of soft-skipping.
+      - name: Checkout gearmand
+        uses: actions/checkout@v4
+        with: { repository: gearman/gearmand, path: gearmand-c }
+      - name: Build gearmand
+        run: |
+          sudo apt-get update && sudo apt-get install -y libboost-all-dev libevent-dev
+          cd gearmand-c && ./bootstrap.sh && ./configure && make -j"$(nproc)"
+          echo "$PWD" >> "$GITHUB_PATH"
+      - run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
