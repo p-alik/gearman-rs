@@ -13,6 +13,11 @@ pub struct Packet {
 
 impl Packet {
     pub fn request(ptype: PacketType, args: Vec<Bytes>) -> Self {
+        debug_assert_eq!(
+            args.len(),
+            ptype.arg_count(),
+            "wrong argument count for {ptype:?}"
+        );
         Packet {
             magic: PacketMagic::Req,
             ptype,
@@ -21,6 +26,11 @@ impl Packet {
     }
 
     pub fn response(ptype: PacketType, args: Vec<Bytes>) -> Self {
+        debug_assert_eq!(
+            args.len(),
+            ptype.arg_count(),
+            "wrong argument count for {ptype:?}"
+        );
         Packet {
             magic: PacketMagic::Res,
             ptype,

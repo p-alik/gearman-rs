@@ -12,7 +12,7 @@ implemented so far.
 | Area | Status |
 |---|---|
 | Wire codec (framing, packet types, args) | done |
-| Client: submit / status | planned |
+| Client: submit / status | done |
 | Worker: register / grab / respond | planned |
 | Admin text protocol | planned (stretch) |
 | TLS | planned (stretch) |

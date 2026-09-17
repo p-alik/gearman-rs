@@ -34,6 +34,9 @@ pub enum GearmanError {
     #[error("no job servers available")]
     NoServersAvailable,
 
+    #[error("job {handle} has no recorded unique id; submit with one to use get_status_unique")]
+    NoUniqueId { handle: String },
+
     #[error("connection closed by peer")]
     ConnectionClosed,
 

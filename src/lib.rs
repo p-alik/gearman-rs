@@ -9,5 +9,8 @@ pub mod protocol;
 
 mod conn;
 
+#[cfg(feature = "client")]
+pub mod client;
+
 pub use conn::Connection;
 pub use error::{GearmanError, Result};
