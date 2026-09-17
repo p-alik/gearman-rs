@@ -23,15 +23,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # Build gearmand from the sibling C repo so the (future) integration
-      # tests run against a real server instead of soft-skipping.
+      # Build gearmand from the sibling C repo so integration tests run
+      # against a real server instead of soft-skipping.
       - name: Checkout gearmand
         uses: actions/checkout@v4
         with: { repository: gearman/gearmand, path: gearmand-c }
       - name: Build gearmand
         run: |
-          sudo apt-get update && sudo apt-get install -y libboost-all-dev libevent-dev
-          cd gearmand-c && ./bootstrap.sh && ./configure && make -j"$(nproc)"
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev libevent-dev gperf libssl-dev
+          cd gearmand-c && ./bootstrap.sh && ./configure --enable-ssl && make -j"$(nproc)"
+          # bootstrap.sh's own internal configure sanity-check can fail
+          # (e.g. a missing build dep) without making bootstrap.sh itself
+          # exit non-zero, so a broken build here would otherwise pass
+          # this step silently and every real-gearmand integration test
+          # would silently soft-skip instead of failing loudly.
+          test -x gearmand/gearmand || { echo "::error::gearmand did not build"; exit 1; }
           echo "$PWD" >> "$GITHUB_PATH"
       - run: cargo test --all-features
 
@@ -60,8 +67,10 @@ jobs:
         with: { repository: gearman/gearmand, path: gearmand-c }
       - name: Build gearmand
         run: |
-          sudo apt-get update && sudo apt-get install -y libboost-all-dev libevent-dev
-          cd gearmand-c && ./bootstrap.sh && ./configure && make -j"$(nproc)"
+          sudo apt-get update
+          sudo apt-get install -y libboost-all-dev libevent-dev gperf libssl-dev
+          cd gearmand-c && ./bootstrap.sh && ./configure --enable-ssl && make -j"$(nproc)"
+          test -x gearmand/gearmand || { echo "::error::gearmand did not build"; exit 1; }
           echo "$PWD" >> "$GITHUB_PATH"
       - run: cargo llvm-cov --all-features --lcov --output-path lcov.info
       - name: Upload coverage reports to Codecov
