@@ -16,10 +16,7 @@ use tokio::sync::oneshot;
 /// all), then replies `ERROR` — simulating a server that doesn't support
 /// the option — and serves one `SUBMIT_JOB_BG` with a real `JOB_CREATED` so
 /// the test can also check that reply isn't misattributed.
-async fn fake_server(
-    listener: TcpListener,
-    release_option_res: oneshot::Receiver<()>,
-) {
+async fn fake_server(listener: TcpListener, release_option_res: oneshot::Receiver<()>) {
     let (stream, _) = listener.accept().await.expect("accept");
     let mut conn = Connection::from_stream(stream);
 
@@ -99,19 +96,12 @@ async fn connect_waits_for_option_req_reply_and_does_not_desync_replies() {
     let client = tokio::time::timeout(Duration::from_secs(5), connect_fut)
         .await
         .expect("connect() should resolve promptly once the reply arrives")
-        .expect(
-            "client should connect even though the server rejects OPTION_REQ",
-        );
+        .expect("client should connect even though the server rejects OPTION_REQ");
 
-    let handle = tokio::time::timeout(
-        Duration::from_secs(5),
-        client.submit_bg("echo", "payload"),
-    )
-    .await
-    .expect("submit_bg should not hang")
-    .expect(
-        "submit_bg should get its own JOB_CREATED reply, not the OPTION_REQ error",
-    );
+    let handle = tokio::time::timeout(Duration::from_secs(5), client.submit_bg("echo", "payload"))
+        .await
+        .expect("submit_bg should not hang")
+        .expect("submit_bg should get its own JOB_CREATED reply, not the OPTION_REQ error");
 
     assert_eq!(handle.as_str(), "H:test:1");
 

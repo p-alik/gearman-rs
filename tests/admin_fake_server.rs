@@ -37,9 +37,7 @@ async fn read_line_rejects_unterminated_line_past_the_cap() {
         .await
         .expect("read_line must not hang reading an unterminated line");
 
-    let err = result.expect_err(
-        "a line exceeding the cap without a terminator must be rejected",
-    );
+    let err = result.expect_err("a line exceeding the cap without a terminator must be rejected");
     assert!(
         matches!(err, GearmanError::AdminLineTooLong(_)),
         "unexpected error: {err:?}"

@@ -86,11 +86,7 @@ impl WorkerBuilder {
         self
     }
 
-    pub fn register<H>(
-        mut self,
-        function: impl Into<String>,
-        handler: H,
-    ) -> Self
+    pub fn register<H>(mut self, function: impl Into<String>, handler: H) -> Self
     where
         H: JobHandler,
     {
@@ -343,18 +339,13 @@ async fn run_grab_loop(
         };
 
         match response.ptype {
-            PacketType::JobAssign
-            | PacketType::JobAssignUniq
-            | PacketType::JobAssignAll => {
+            PacketType::JobAssign | PacketType::JobAssignUniq | PacketType::JobAssignAll => {
                 dispatch_job(conn, registry, response).await;
             }
             PacketType::NoJob => {
-                if send_packet(
-                    conn,
-                    Packet::request(PacketType::PreSleep, vec![]),
-                )
-                .await
-                .is_err()
+                if send_packet(conn, Packet::request(PacketType::PreSleep, vec![]))
+                    .await
+                    .is_err()
                 {
                     return LoopOutcome::ConnectionLost;
                 }
@@ -405,11 +396,7 @@ async fn flush_unregistrations(
     }
 }
 
-async fn dispatch_job(
-    conn: &SharedConnection,
-    registry: &Arc<RwLock<Registry>>,
-    pkt: Packet,
-) {
+async fn dispatch_job(conn: &SharedConnection, registry: &Arc<RwLock<Registry>>, pkt: Packet) {
     let handle = pkt.arg_str(0).unwrap_or_default().to_string();
     let function = pkt.arg_str(1).unwrap_or_default().to_string();
     let (unique, reducer, payload) = match pkt.ptype {

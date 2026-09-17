@@ -26,9 +26,7 @@ async fn main() -> anyhow::Result<()> {
         .register("reverse", reverse)
         .run();
 
-    println!(
-        "worker running, registered for \"reverse\"; press Ctrl+C to stop"
-    );
+    println!("worker running, registered for \"reverse\"; press Ctrl+C to stop");
     tokio::signal::ctrl_c().await?;
 
     println!("shutting down...");

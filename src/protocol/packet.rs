@@ -78,12 +78,14 @@ impl Packet {
 
         let mut args = Vec::with_capacity(count);
         for _ in 0..count - 1 {
-            let nul_pos = payload.iter().position(|&b| b == 0).ok_or(
-                GearmanError::MalformedBody {
-                    ptype,
-                    reason: "missing NUL argument separator",
-                },
-            )?;
+            let nul_pos =
+                payload
+                    .iter()
+                    .position(|&b| b == 0)
+                    .ok_or(GearmanError::MalformedBody {
+                        ptype,
+                        reason: "missing NUL argument separator",
+                    })?;
             let arg = payload.split_to(nul_pos);
             payload.advance(1); // skip the NUL separator itself
             args.push(arg);

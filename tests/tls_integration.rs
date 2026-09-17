@@ -13,10 +13,8 @@ use gearman::tls::TlsConfig;
 use tokio_rustls::rustls;
 
 const CERT_PEM: &[u8] = include_bytes!("tls_fixtures/cert.pem");
-const KEY_PEM: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/tls_fixtures/key.pem");
-const CERT_PEM_PATH: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/tls_fixtures/cert.pem");
+const KEY_PEM: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/tls_fixtures/key.pem");
+const CERT_PEM_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/tls_fixtures/cert.pem");
 
 fn client_tls_config() -> TlsConfig {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();

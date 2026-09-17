@@ -1,0 +1,4 @@
+# Pins formatting to rustfmt's defaults regardless of a contributor's own
+# global rustfmt config (e.g. a narrower max_width) - CI's `cargo fmt --all
+# -- --check` has no such override, so this file must exist for local
+# `cargo fmt` runs to match it.

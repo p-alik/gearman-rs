@@ -13,8 +13,8 @@
 //! used to build this module.
 
 use tokio::io::{
-    split, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
-    BufReader, ReadHalf, WriteHalf,
+    split, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader,
+    ReadHalf, WriteHalf,
 };
 use tokio::net::{TcpStream, ToSocketAddrs};
 
@@ -67,9 +67,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AdminClient<S> {
         if n == 0 {
             return Err(GearmanError::ConnectionClosed);
         }
-        if !line.ends_with('\n')
-            && line.len() as u64 >= MAX_ADMIN_LINE_LEN as u64
-        {
+        if !line.ends_with('\n') && line.len() as u64 >= MAX_ADMIN_LINE_LEN as u64 {
             return Err(GearmanError::AdminLineTooLong(MAX_ADMIN_LINE_LEN));
         }
         while line.ends_with(['\n', '\r']) {
@@ -127,9 +125,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AdminClient<S> {
     /// `prioritystatus`: queued job counts per function, broken out by
     /// priority (job assignment priority is global across functions, not
     /// per-function, but these counts are reported per function).
-    pub async fn priority_status(
-        &mut self,
-    ) -> Result<Vec<PriorityFunctionStatus>> {
+    pub async fn priority_status(&mut self) -> Result<Vec<PriorityFunctionStatus>> {
         self.send_line("prioritystatus").await?;
         self.read_dot_terminated()
             .await?
@@ -174,11 +170,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AdminClient<S> {
     }
 
     /// `maxqueue <function> ...`.
-    pub async fn set_max_queue(
-        &mut self,
-        function: &str,
-        size: MaxQueueSize,
-    ) -> Result<()> {
+    pub async fn set_max_queue(&mut self, function: &str, size: MaxQueueSize) -> Result<()> {
         let cmd = match size {
             MaxQueueSize::Default => format!("maxqueue {function}"),
             MaxQueueSize::Uniform(n) => format!("maxqueue {function} {n}"),
@@ -274,10 +266,7 @@ fn parse_ack_line(line: String) -> Result<Option<String>> {
     Err(GearmanError::AdminProtocolError { line })
 }
 
-fn next_field<'a>(
-    fields: &mut std::str::Split<'a, char>,
-    line: &str,
-) -> Result<&'a str> {
+fn next_field<'a>(fields: &mut std::str::Split<'a, char>, line: &str) -> Result<&'a str> {
     fields
         .next()
         .ok_or_else(|| GearmanError::AdminProtocolError {
@@ -348,11 +337,11 @@ fn parse_job_list_line(line: &str) -> Result<JobListEntry> {
 /// absent). Split on the literal `" :"` rather than the first bare `:`, so
 /// an IPv6 address in the IP field doesn't get mistaken for the delimiter.
 fn parse_worker_line(line: &str) -> Result<WorkerInfo> {
-    let (prefix, functions_part) = line.split_once(" :").ok_or_else(|| {
-        GearmanError::AdminProtocolError {
-            line: line.to_string(),
-        }
-    })?;
+    let (prefix, functions_part) =
+        line.split_once(" :")
+            .ok_or_else(|| GearmanError::AdminProtocolError {
+                line: line.to_string(),
+            })?;
     let mut fields = prefix.split_whitespace();
     let fd = parse_i32(next_field2(&mut fields, line)?, line)?;
     let ip = next_field2(&mut fields, line)?.to_string();
@@ -369,10 +358,7 @@ fn parse_worker_line(line: &str) -> Result<WorkerInfo> {
     })
 }
 
-fn next_field2<'a>(
-    fields: &mut std::str::SplitWhitespace<'a>,
-    line: &str,
-) -> Result<&'a str> {
+fn next_field2<'a>(fields: &mut std::str::SplitWhitespace<'a>, line: &str) -> Result<&'a str> {
     fields
         .next()
         .ok_or_else(|| GearmanError::AdminProtocolError {

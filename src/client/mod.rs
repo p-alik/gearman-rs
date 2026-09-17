@@ -2,8 +2,7 @@ mod job;
 mod multi;
 
 pub use job::{
-    JobEvent, JobEventStream, JobHandle, JobStatus, Priority, SubmitOptions,
-    SubmittedJob,
+    JobEvent, JobEventStream, JobHandle, JobStatus, Priority, SubmitOptions, SubmittedJob,
 };
 
 use std::collections::{HashMap, VecDeque};
@@ -229,11 +228,7 @@ impl Client {
     /// Submits a job and waits for it to complete, returning its result
     /// payload. `WORK_STATUS`/`WORK_DATA`/`WORK_WARNING` events along the way
     /// are discarded; use [`Client::submit`] directly to observe them.
-    pub async fn submit_fg(
-        &self,
-        function: &str,
-        payload: impl Into<Bytes>,
-    ) -> Result<Bytes> {
+    pub async fn submit_fg(&self, function: &str, payload: impl Into<Bytes>) -> Result<Bytes> {
         self.submit_fg_unique(function, None, payload).await
     }
 
@@ -270,11 +265,7 @@ impl Client {
         }
     }
 
-    pub async fn submit_bg(
-        &self,
-        function: &str,
-        payload: impl Into<Bytes>,
-    ) -> Result<JobHandle> {
+    pub async fn submit_bg(&self, function: &str, payload: impl Into<Bytes>) -> Result<JobHandle> {
         let submitted = self
             .submit(function, None, payload, SubmitOptions::background())
             .await?;
@@ -294,22 +285,15 @@ impl Client {
         rx.await.map_err(|_| GearmanError::ConnectionClosed)?
     }
 
-    pub async fn get_status_unique(
-        &self,
-        handle: &JobHandle,
-    ) -> Result<JobStatus> {
-        let unique =
-            handle
-                .unique
-                .clone()
-                .ok_or_else(|| GearmanError::NoUniqueId {
-                    handle: handle.handle.clone(),
-                })?;
+    pub async fn get_status_unique(&self, handle: &JobHandle) -> Result<JobStatus> {
+        let unique = handle
+            .unique
+            .clone()
+            .ok_or_else(|| GearmanError::NoUniqueId {
+                handle: handle.handle.clone(),
+            })?;
         let slot = self.pool.get(handle.server_index);
-        let packet = Packet::request(
-            PacketType::GetStatusUnique,
-            vec![Bytes::from(unique)],
-        );
+        let packet = Packet::request(PacketType::GetStatusUnique, vec![Bytes::from(unique)]);
         let (tx, rx) = oneshot::channel();
         slot.cmd_tx
             .send(ClientCommand::StatusUnique { packet, reply: tx })
@@ -420,9 +404,7 @@ async fn run_server_actor(
 /// connection is handed to [`actor_loop`], so the reply never has a chance
 /// to be misattributed to an unrelated request via `pending_replies`.
 /// Returns whether the server acknowledged the option.
-async fn negotiate_exceptions(
-    conn: &mut Connection<BoxedStream>,
-) -> Result<bool> {
+async fn negotiate_exceptions(conn: &mut Connection<BoxedStream>) -> Result<bool> {
     let opt_pkt = Packet::request(
         PacketType::OptionReq,
         vec![Bytes::from_static(b"exceptions")],
@@ -434,11 +416,7 @@ async fn negotiate_exceptions(
         Some(packet) if packet.ptype == PacketType::Error => {
             let code = packet.arg_str(0).unwrap_or_default().to_string();
             let text = packet.arg_str(1).unwrap_or_default().to_string();
-            tracing::debug!(
-                code,
-                text,
-                "OPTION_REQ exceptions rejected by server"
-            );
+            tracing::debug!(code, text, "OPTION_REQ exceptions rejected by server");
             Ok(false)
         }
         Some(other) => {
@@ -460,11 +438,9 @@ async fn actor_loop(
     cmd_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
 ) -> ActorOutcome {
     let mut pending_replies: VecDeque<PendingReply> = VecDeque::new();
-    let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> =
-        HashMap::new();
+    let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> = HashMap::new();
     let mut prune_interval = tokio::time::interval(JOB_EVENTS_PRUNE_INTERVAL);
-    prune_interval
-        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    prune_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let outcome = loop {
         tokio::select! {
@@ -555,28 +531,19 @@ fn handle_incoming(
             Some(PendingReply::StatusUnique(reply)) => {
                 let _ = reply.send(Ok(parse_status_res_unique(&packet)));
             }
-            _ => tracing::warn!(
-                "unexpected STATUS_RES_UNIQUE with no pending request"
-            ),
+            _ => tracing::warn!("unexpected STATUS_RES_UNIQUE with no pending request"),
         },
         PacketType::Error => {
             let code = packet.arg_str(0).unwrap_or_default().to_string();
             let text = packet.arg_str(1).unwrap_or_default().to_string();
             match pending_replies.pop_front() {
                 Some(PendingReply::JobCreated { reply, .. }) => {
-                    let _ = reply
-                        .send(Err(GearmanError::ServerError { code, text }));
+                    let _ = reply.send(Err(GearmanError::ServerError { code, text }));
                 }
-                Some(PendingReply::Status(reply))
-                | Some(PendingReply::StatusUnique(reply)) => {
-                    let _ = reply
-                        .send(Err(GearmanError::ServerError { code, text }));
+                Some(PendingReply::Status(reply)) | Some(PendingReply::StatusUnique(reply)) => {
+                    let _ = reply.send(Err(GearmanError::ServerError { code, text }));
                 }
-                None => tracing::warn!(
-                    code,
-                    text,
-                    "unsolicited ERROR from job server"
-                ),
+                None => tracing::warn!(code, text, "unsolicited ERROR from job server"),
             }
         }
         PacketType::WorkStatus
@@ -602,17 +569,13 @@ fn dispatch_work_event(
     };
     let terminal = matches!(
         packet.ptype,
-        PacketType::WorkComplete
-            | PacketType::WorkFail
-            | PacketType::WorkException
+        PacketType::WorkComplete | PacketType::WorkFail | PacketType::WorkException
     );
 
     let event = match packet.ptype {
         PacketType::WorkStatus => {
-            let numerator =
-                packet.arg_str(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-            let denominator =
-                packet.arg_str(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let numerator = packet.arg_str(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+            let denominator = packet.arg_str(2).and_then(|s| s.parse().ok()).unwrap_or(0);
             JobEvent::Status {
                 numerator,
                 denominator,
@@ -622,9 +585,7 @@ fn dispatch_work_event(
             JobEvent::Complete(packet.args.get(1).cloned().unwrap_or_default())
         }
         PacketType::WorkFail => JobEvent::Fail,
-        PacketType::WorkData => {
-            JobEvent::Data(packet.args.get(1).cloned().unwrap_or_default())
-        }
+        PacketType::WorkData => JobEvent::Data(packet.args.get(1).cloned().unwrap_or_default()),
         PacketType::WorkWarning => {
             JobEvent::Warning(packet.args.get(1).cloned().unwrap_or_default())
         }
@@ -647,10 +608,7 @@ fn parse_status_res(packet: &Packet) -> JobStatus {
         known: packet.arg_str(1) == Some("1"),
         running: packet.arg_str(2) == Some("1"),
         numerator: packet.arg_str(3).and_then(|s| s.parse().ok()).unwrap_or(0),
-        denominator: packet
-            .arg_str(4)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0),
+        denominator: packet.arg_str(4).and_then(|s| s.parse().ok()).unwrap_or(0),
         client_count: None,
     }
 }
@@ -660,10 +618,7 @@ fn parse_status_res_unique(packet: &Packet) -> JobStatus {
         known: packet.arg_str(1) == Some("1"),
         running: packet.arg_str(2) == Some("1"),
         numerator: packet.arg_str(3).and_then(|s| s.parse().ok()).unwrap_or(0),
-        denominator: packet
-            .arg_str(4)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0),
+        denominator: packet.arg_str(4).and_then(|s| s.parse().ok()).unwrap_or(0),
         client_count: packet.arg_str(5).and_then(|s| s.parse().ok()),
     }
 }
@@ -682,8 +637,7 @@ mod tests {
     /// rather than living for the rest of the connection.
     #[test]
     fn closed_job_event_senders_get_pruned() {
-        let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> =
-            HashMap::new();
+        let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> = HashMap::new();
 
         let (still_open_tx, _still_open_rx) = mpsc::unbounded_channel();
         job_events.insert("H:open:1".to_string(), still_open_tx);

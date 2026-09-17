@@ -24,8 +24,7 @@ impl GearmandProcess {
     }
 
     pub fn start_with_args(extra_args: &[&str]) -> Option<Self> {
-        let bin = std::env::var("GEARMAND_BIN")
-            .unwrap_or_else(|_| "gearmand".to_string());
+        let bin = std::env::var("GEARMAND_BIN").unwrap_or_else(|_| "gearmand".to_string());
         if which(&bin).is_none() {
             eprintln!(
                 "skipping integration test: no `{bin}` binary found (set GEARMAND_BIN or add gearmand to PATH)"
@@ -123,11 +122,7 @@ impl<S: tracing::Subscriber> Layer<S> for LogCapture {
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         struct MessageVisitor(String);
         impl tracing::field::Visit for MessageVisitor {
-            fn record_debug(
-                &mut self,
-                field: &tracing::field::Field,
-                value: &dyn std::fmt::Debug,
-            ) {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
                 if field.name() == "message" {
                     self.0 = format!("{value:?}");
                 }

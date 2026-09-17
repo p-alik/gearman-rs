@@ -37,10 +37,7 @@ impl Decoder for GearmanCodec {
     type Item = Packet;
     type Error = GearmanError;
 
-    fn decode(
-        &mut self,
-        src: &mut BytesMut,
-    ) -> Result<Option<Packet>, GearmanError> {
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Packet>, GearmanError> {
         if src.len() < HEADER_LEN {
             return Ok(None);
         }
@@ -77,11 +74,7 @@ impl Decoder for GearmanCodec {
 impl Encoder<Packet> for GearmanCodec {
     type Error = GearmanError;
 
-    fn encode(
-        &mut self,
-        pkt: Packet,
-        dst: &mut BytesMut,
-    ) -> Result<(), GearmanError> {
+    fn encode(&mut self, pkt: Packet, dst: &mut BytesMut) -> Result<(), GearmanError> {
         let expected = pkt.ptype.arg_count();
         if pkt.args.len() != expected {
             return Err(GearmanError::WrongArgCount {

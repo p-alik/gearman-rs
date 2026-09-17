@@ -130,20 +130,15 @@ impl PacketType {
     pub fn arg_count(self) -> usize {
         use PacketType::*;
         match self {
-            ResetAbilities | PreSleep | Noop | GrabJob | NoJob | AllYours
-            | GrabJobUniq | GrabJobAll => 0,
-            CanDo | CantDo | JobCreated | WorkFail | GetStatus | EchoReq
-            | EchoRes | SetClientId | OptionReq | OptionRes
-            | GetStatusUnique => 1,
-            Error | CanDoTimeout | WorkComplete | WorkException | WorkData
-            | WorkWarning => 2,
-            SubmitJob | SubmitJobBg | SubmitJobHigh | SubmitJobHighBg
-            | SubmitJobLow | SubmitJobLowBg | WorkStatus | JobAssign => 3,
+            ResetAbilities | PreSleep | Noop | GrabJob | NoJob | AllYours | GrabJobUniq
+            | GrabJobAll => 0,
+            CanDo | CantDo | JobCreated | WorkFail | GetStatus | EchoReq | EchoRes
+            | SetClientId | OptionReq | OptionRes | GetStatusUnique => 1,
+            Error | CanDoTimeout | WorkComplete | WorkException | WorkData | WorkWarning => 2,
+            SubmitJob | SubmitJobBg | SubmitJobHigh | SubmitJobHighBg | SubmitJobLow
+            | SubmitJobLowBg | WorkStatus | JobAssign => 3,
             SubmitJobEpoch | JobAssignUniq => 4,
-            SubmitReduceJob
-            | SubmitReduceJobBackground
-            | JobAssignAll
-            | StatusRes => 5,
+            SubmitReduceJob | SubmitReduceJobBackground | JobAssignAll | StatusRes => 5,
             StatusResUnique => 6,
             SubmitJobSched => 8,
         }

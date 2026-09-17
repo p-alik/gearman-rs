@@ -21,10 +21,7 @@ async fn echo(job: WorkerJob) -> Result<Bytes, WorkError> {
 /// After `PRE_SLEEP`, replies with something other than `NOOP`, then checks
 /// the worker recovers (re-sends `GRAB_JOB_UNIQ` instead of getting stuck or
 /// erroring out) by handing it a real job on the next grab.
-async fn fake_server_bad_wakeup(
-    listener: TcpListener,
-    work_complete_tx: oneshot::Sender<Packet>,
-) {
+async fn fake_server_bad_wakeup(listener: TcpListener, work_complete_tx: oneshot::Sender<Packet>) {
     let (stream, _) = listener.accept().await.expect("accept");
     let mut conn = Connection::from_stream(stream);
 
@@ -81,13 +78,10 @@ async fn worker_recovers_from_unexpected_packet_while_sleeping() {
         .register("echo", echo)
         .run();
 
-    let work_complete = tokio::time::timeout(
-        Duration::from_secs(5),
-        work_complete_rx,
-    )
-    .await
-    .expect("worker should not get stuck after the unexpected wake-up packet")
-    .expect("fake server task should not be dropped without sending");
+    let work_complete = tokio::time::timeout(Duration::from_secs(5), work_complete_rx)
+        .await
+        .expect("worker should not get stuck after the unexpected wake-up packet")
+        .expect("fake server task should not be dropped without sending");
 
     assert_eq!(work_complete.ptype, PacketType::WorkComplete);
     assert_eq!(work_complete.arg_str(0), Some("H:test:1"));

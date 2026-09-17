@@ -89,10 +89,7 @@ pub struct JobEventStream {
 impl Stream for JobEventStream {
     type Item = JobEvent;
 
-    fn poll_next(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<JobEvent>> {
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<JobEvent>> {
         self.get_mut().rx.poll_recv(cx)
     }
 }

@@ -72,9 +72,7 @@ async fn shutdown_completes_and_logs_after_a_panicking_handler() {
     let start = Instant::now();
     tokio::time::timeout(Duration::from_secs(5), worker.shutdown())
         .await
-        .expect(
-            "shutdown() must not hang waiting on a task that already panicked",
-        );
+        .expect("shutdown() must not hang waiting on a task that already panicked");
     let elapsed = start.elapsed();
     assert!(
         elapsed < Duration::from_secs(2),

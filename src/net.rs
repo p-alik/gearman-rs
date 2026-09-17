@@ -10,10 +10,7 @@ use tokio::net::TcpStream;
 use crate::error::Result;
 use crate::Connection;
 
-pub(crate) trait AsyncStream:
-    AsyncRead + AsyncWrite + Send + Unpin
-{
-}
+pub(crate) trait AsyncStream: AsyncRead + AsyncWrite + Send + Unpin {}
 impl<T: AsyncRead + AsyncWrite + Send + Unpin> AsyncStream for T {}
 
 pub(crate) type BoxedStream = Box<dyn AsyncStream>;
@@ -26,15 +23,10 @@ pub(crate) enum Transport {
     Tls(crate::tls::TlsConfig),
 }
 
-pub(crate) async fn connect(
-    addr: &str,
-    transport: &Transport,
-) -> Result<Connection<BoxedStream>> {
+pub(crate) async fn connect(addr: &str, transport: &Transport) -> Result<Connection<BoxedStream>> {
     let tcp = TcpStream::connect(addr).await?;
     match transport {
-        Transport::Plain => {
-            Ok(Connection::from_stream(Box::new(tcp) as BoxedStream))
-        }
+        Transport::Plain => Ok(Connection::from_stream(Box::new(tcp) as BoxedStream)),
         #[cfg(feature = "tls")]
         Transport::Tls(config) => {
             let server_name = crate::tls::server_name(addr)?;

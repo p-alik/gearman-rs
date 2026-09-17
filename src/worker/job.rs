@@ -47,11 +47,7 @@ pub struct Reporter {
 }
 
 impl Reporter {
-    pub async fn report_status(
-        &self,
-        numerator: u64,
-        denominator: u64,
-    ) -> Result<()> {
+    pub async fn report_status(&self, numerator: u64, denominator: u64) -> Result<()> {
         let packet = Packet::request(
             PacketType::WorkStatus,
             vec![
@@ -82,23 +78,16 @@ impl Reporter {
 
 #[async_trait]
 pub trait JobHandler: Send + Sync + 'static {
-    async fn run(
-        &self,
-        job: WorkerJob,
-    ) -> std::result::Result<Bytes, WorkError>;
+    async fn run(&self, job: WorkerJob) -> std::result::Result<Bytes, WorkError>;
 }
 
 #[async_trait]
 impl<F, Fut> JobHandler for F
 where
     F: Fn(WorkerJob) -> Fut + Send + Sync + 'static,
-    Fut:
-        Future<Output = std::result::Result<Bytes, WorkError>> + Send + 'static,
+    Fut: Future<Output = std::result::Result<Bytes, WorkError>> + Send + 'static,
 {
-    async fn run(
-        &self,
-        job: WorkerJob,
-    ) -> std::result::Result<Bytes, WorkError> {
+    async fn run(&self, job: WorkerJob) -> std::result::Result<Bytes, WorkError> {
         self(job).await
     }
 }

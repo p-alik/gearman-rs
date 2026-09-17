@@ -222,8 +222,7 @@ fn decoder_handles_partial_reads() {
 #[test]
 fn decoder_rejects_bad_magic() {
     let mut codec = GearmanCodec::new();
-    let mut buf =
-        BytesMut::from(&b"\x00BAD\x00\x00\x00\x01\x00\x00\x00\x00"[..]);
+    let mut buf = BytesMut::from(&b"\x00BAD\x00\x00\x00\x01\x00\x00\x00\x00"[..]);
     assert!(codec.decode(&mut buf).is_err());
 }
 

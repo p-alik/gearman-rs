@@ -47,10 +47,8 @@ pub(crate) fn server_name(addr: &str) -> Result<ServerName<'static>> {
         .strip_prefix('[')
         .and_then(|h| h.strip_suffix(']'))
         .unwrap_or(host);
-    ServerName::try_from(host.to_string()).map_err(|_| {
-        GearmanError::InvalidServerName {
-            host: host.to_string(),
-        }
+    ServerName::try_from(host.to_string()).map_err(|_| GearmanError::InvalidServerName {
+        host: host.to_string(),
     })
 }
 
@@ -61,8 +59,7 @@ mod tests {
     #[test]
     fn strips_port_from_plain_host() {
         let name = server_name("gearman.example.com:4730").unwrap();
-        let expected =
-            ServerName::try_from("gearman.example.com".to_string()).unwrap();
+        let expected = ServerName::try_from("gearman.example.com".to_string()).unwrap();
         assert_eq!(name, expected);
     }
 

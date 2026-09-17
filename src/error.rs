@@ -22,9 +22,7 @@ pub enum GearmanError {
         reason: &'static str,
     },
 
-    #[error(
-        "wrong argument count for {ptype:?}: expected {expected}, got {actual}"
-    )]
+    #[error("wrong argument count for {ptype:?}: expected {expected}, got {actual}")]
     WrongArgCount {
         ptype: PacketType,
         expected: usize,
