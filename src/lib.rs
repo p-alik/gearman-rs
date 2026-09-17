@@ -1,0 +1,13 @@
+//! Native async Gearman protocol client and worker, built on tokio.
+//!
+//! Implements the Gearman binary wire protocol directly (no dependency on
+//! the C `libgearman`). See the `PROTOCOL` file in the gearmand C sources
+//! for the canonical wire-format reference this crate was built against.
+
+pub mod error;
+pub mod protocol;
+
+mod conn;
+
+pub use conn::Connection;
+pub use error::{GearmanError, Result};

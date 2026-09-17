@@ -1,0 +1,33 @@
+[package]
+name = "gearman"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+description = "Native async Gearman protocol client and worker, built on tokio"
+repository = "https://github.com/apastuchov/gearman-rs"
+keywords = ["gearman", "job-queue", "distributed", "tokio"]
+categories = ["network-programming", "asynchronous"]
+
+[features]
+default = ["client", "worker"]
+client = []
+worker = []
+admin = []
+tls = ["dep:tokio-rustls"]
+
+[dependencies]
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "time", "sync", "io-util"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
+thiserror = "1"
+tracing = "0.1"
+futures = "0.3"
+async-trait = "0.1"
+tokio-rustls = { version = "0.26", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-test = "0.4"
+anyhow = "1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

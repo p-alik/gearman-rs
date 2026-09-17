@@ -1,0 +1,43 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt }
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - run: cargo clippy --all-features --all-targets -- -D warnings
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # Build gearmand from the sibling C repo so the (future) integration
+      # tests run against a real server instead of soft-skipping.
+      - name: Checkout gearmand
+        uses: actions/checkout@v4
+        with: { repository: gearman/gearmand, path: gearmand-c }
+      - name: Build gearmand
+        run: |
+          sudo apt-get update && sudo apt-get install -y libboost-all-dev libevent-dev
+          cd gearmand-c && ./bootstrap.sh && ./configure && make -j"$(nproc)"
+          echo "$PWD" >> "$GITHUB_PATH"
+      - run: cargo test --all-features
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.75
+      - run: cargo check --all-features
