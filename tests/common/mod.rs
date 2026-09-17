@@ -2,6 +2,11 @@
 //! can be found (via `GEARMAND_BIN` or `PATH`), tests using this fixture
 //! soft-skip with a notice instead of failing, so `cargo test` still gives a
 //! clean pass on machines that haven't built the C server.
+//!
+//! Each `tests/*.rs` file compiles its own copy of this module, and not
+//! every file uses every helper here, so the compiler sees "dead code" in
+//! any one binary that isn't real — hence the blanket allow.
+#![allow(dead_code)]
 
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -15,6 +20,10 @@ pub struct GearmandProcess {
 
 impl GearmandProcess {
     pub fn start() -> Option<Self> {
+        Self::start_with_args(&[])
+    }
+
+    pub fn start_with_args(extra_args: &[&str]) -> Option<Self> {
         let bin = std::env::var("GEARMAND_BIN")
             .unwrap_or_else(|_| "gearmand".to_string());
         if which(&bin).is_none() {
@@ -27,6 +36,7 @@ impl GearmandProcess {
         let port = free_port();
         let child = Command::new(&bin)
             .args(["-p", &port.to_string()])
+            .args(extra_args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()

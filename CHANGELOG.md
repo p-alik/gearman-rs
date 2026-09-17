@@ -50,3 +50,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   gearmand's `create function` handler computes the function name length
   assuming CRLF, and silently truncates the last character on a bare LF.
   Verified against a real `gearmand`.
+- `tls` feature: `TlsConfig` (wraps a caller-supplied `rustls::ClientConfig`
+  — this crate doesn't bundle a root store) plus `ClientBuilder::tls`/
+  `WorkerBuilder::tls`. Internally, `Client`/`Worker` connections are now
+  always routed through a boxed `dyn AsyncStream` so their actor loops have
+  one connection type regardless of whether `tls` is enabled. gearmand
+  wraps the raw TCP stream in TLS before any Gearman framing begins (not
+  STARTTLS), matching how `Connection::from_stream`/`AdminClient::from_stream`
+  are already generic over the byte stream. Verified against a real
+  `gearmand --ssl` using a self-signed test cert (`tests/tls_fixtures`,
+  end-entity, not a CA — a CA-flagged leaf cert is correctly rejected by
+  rustls-webpki).
+- Connection/registration failures in `Client` and `Worker` reconnect loops
+  are now logged via `tracing::warn!` instead of being silently swallowed.
+- `Cargo.toml` now declares `required-features` for every example and
+  integration test that needs `client`/`worker`/`admin`/`tls`, so building
+  or testing with a reduced feature set cleanly skips them instead of
+  failing to compile.

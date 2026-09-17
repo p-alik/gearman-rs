@@ -3,14 +3,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
 use crate::error::Result;
+use crate::net::BoxedStream;
 use crate::protocol::{Packet, PacketType};
 use crate::Connection;
 
-pub(crate) type SharedConnection = Arc<Mutex<Connection<TcpStream>>>;
+pub(crate) type SharedConnection = Arc<Mutex<Connection<BoxedStream>>>;
 
 /// Why a handler failed. The wire protocol only lets `WORK_FAIL` carry a
 /// handle, no message — a description of the failure can only reach the

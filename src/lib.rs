@@ -9,6 +9,9 @@ pub mod protocol;
 
 mod conn;
 
+#[cfg(any(feature = "client", feature = "worker"))]
+mod net;
+
 #[cfg(feature = "client")]
 pub mod client;
 
@@ -17,6 +20,9 @@ pub mod worker;
 
 #[cfg(feature = "admin")]
 pub mod admin;
+
+#[cfg(feature = "tls")]
+pub mod tls;
 
 pub use conn::Connection;
 pub use error::{GearmanError, Result};

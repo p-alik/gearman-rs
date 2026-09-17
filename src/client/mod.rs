@@ -16,6 +16,7 @@ use futures::StreamExt;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error::{GearmanError, Result};
+use crate::net::{BoxedStream, Transport};
 use crate::protocol::{Packet, PacketType};
 use crate::Connection;
 
@@ -24,6 +25,7 @@ use multi::{ServerPool, ServerSlot};
 pub struct ClientBuilder {
     servers: Vec<String>,
     with_exceptions: bool,
+    transport: Transport,
 }
 
 impl ClientBuilder {
@@ -31,6 +33,7 @@ impl ClientBuilder {
         Self {
             servers: Vec::new(),
             with_exceptions: false,
+            transport: Transport::default(),
         }
     }
 
@@ -50,6 +53,14 @@ impl ClientBuilder {
         self
     }
 
+    /// Connect to every server over TLS instead of plain TCP. gearmand
+    /// wraps the raw stream in TLS before any Gearman framing begins.
+    #[cfg(feature = "tls")]
+    pub fn tls(mut self, config: crate::tls::TlsConfig) -> Self {
+        self.transport = Transport::Tls(config);
+        self
+    }
+
     /// Spawns one persistent connection per server and waits (up to 5s) for
     /// at least one to come up before returning.
     pub async fn connect(self) -> Result<Client> {
@@ -66,6 +77,7 @@ impl ClientBuilder {
                 cmd_rx,
                 connected.clone(),
                 self.with_exceptions,
+                self.transport.clone(),
             ));
             slots.push(ServerSlot { cmd_tx, connected });
         }
@@ -294,32 +306,44 @@ async fn run_server_actor(
     mut cmd_rx: mpsc::UnboundedReceiver<ClientCommand>,
     connected: Arc<AtomicBool>,
     with_exceptions: bool,
+    transport: Transport,
 ) {
     let mut backoff = Duration::from_millis(100);
     const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
     loop {
-        if let Ok(mut conn) = Connection::connect(&addr).await {
-            let ready = if with_exceptions {
-                let opt_pkt = Packet::request(
-                    PacketType::OptionReq,
-                    vec![Bytes::from_static(b"exceptions")],
-                );
-                conn.send(opt_pkt).await.is_ok()
-            } else {
-                true
-            };
+        match crate::net::connect(&addr, &transport).await {
+            Ok(mut conn) => {
+                let ready = if with_exceptions {
+                    let opt_pkt = Packet::request(
+                        PacketType::OptionReq,
+                        vec![Bytes::from_static(b"exceptions")],
+                    );
+                    match conn.send(opt_pkt).await {
+                        Ok(()) => true,
+                        Err(e) => {
+                            tracing::warn!(server = %addr, error = %e, "failed to send OPTION_REQ exceptions");
+                            false
+                        }
+                    }
+                } else {
+                    true
+                };
 
-            if ready {
-                connected.store(true, Ordering::Relaxed);
-                backoff = Duration::from_millis(100);
+                if ready {
+                    connected.store(true, Ordering::Relaxed);
+                    backoff = Duration::from_millis(100);
 
-                let outcome = actor_loop(&mut conn, &mut cmd_rx).await;
-                connected.store(false, Ordering::Relaxed);
+                    let outcome = actor_loop(&mut conn, &mut cmd_rx).await;
+                    connected.store(false, Ordering::Relaxed);
 
-                if matches!(outcome, ActorOutcome::ClientDropped) {
-                    return;
+                    if matches!(outcome, ActorOutcome::ClientDropped) {
+                        return;
+                    }
                 }
+            }
+            Err(e) => {
+                tracing::warn!(server = %addr, error = %e, "failed to connect to job server");
             }
         }
 
@@ -329,7 +353,7 @@ async fn run_server_actor(
 }
 
 async fn actor_loop(
-    conn: &mut Connection,
+    conn: &mut Connection<BoxedStream>,
     cmd_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
 ) -> ActorOutcome {
     let mut pending_replies: VecDeque<PendingReply> = VecDeque::new();

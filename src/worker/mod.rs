@@ -12,6 +12,7 @@ use tokio::sync::watch;
 use tokio::task::JoinSet;
 
 use crate::error::Result;
+use crate::net::{BoxedStream, Transport};
 use crate::protocol::{Packet, PacketType};
 use crate::Connection;
 
@@ -32,6 +33,7 @@ pub struct WorkerBuilder {
     concurrency: usize,
     grab_mode: GrabMode,
     registry: Registry,
+    transport: Transport,
 }
 
 impl WorkerBuilder {
@@ -43,6 +45,7 @@ impl WorkerBuilder {
                 .unwrap_or(1),
             grab_mode: GrabMode::Uniq,
             registry: HashMap::new(),
+            transport: Transport::default(),
         }
     }
 
@@ -66,6 +69,14 @@ impl WorkerBuilder {
 
     pub fn grab_mode(mut self, mode: GrabMode) -> Self {
         self.grab_mode = mode;
+        self
+    }
+
+    /// Connect to every server over TLS instead of plain TCP. gearmand
+    /// wraps the raw stream in TLS before any Gearman framing begins.
+    #[cfg(feature = "tls")]
+    pub fn tls(mut self, config: crate::tls::TlsConfig) -> Self {
+        self.transport = Transport::Tls(config);
         self
     }
 
@@ -118,6 +129,7 @@ impl WorkerBuilder {
                     registry.clone(),
                     self.grab_mode,
                     shutdown_rx.clone(),
+                    self.transport.clone(),
                 ));
             }
         }
@@ -165,6 +177,7 @@ async fn run_worker_connection(
     registry: Arc<Registry>,
     grab_mode: GrabMode,
     mut shutdown_rx: watch::Receiver<bool>,
+    transport: Transport,
 ) {
     let mut backoff = Duration::from_millis(100);
     const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -174,16 +187,18 @@ async fn run_worker_connection(
             return;
         }
 
-        let mut conn = match Connection::connect(&addr).await {
+        let mut conn = match crate::net::connect(&addr, &transport).await {
             Ok(conn) => conn,
-            Err(_) => {
+            Err(e) => {
+                tracing::warn!(server = %addr, error = %e, "failed to connect to job server");
                 tokio::time::sleep(backoff).await;
                 backoff = (backoff * 2).min(MAX_BACKOFF);
                 continue;
             }
         };
 
-        if register_functions(&mut conn, &registry).await.is_err() {
+        if let Err(e) = register_functions(&mut conn, &registry).await {
+            tracing::warn!(server = %addr, error = %e, "failed to register functions");
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(MAX_BACKOFF);
             continue;
@@ -203,7 +218,7 @@ async fn run_worker_connection(
 }
 
 async fn register_functions(
-    conn: &mut Connection,
+    conn: &mut Connection<BoxedStream>,
     registry: &Registry,
 ) -> Result<()> {
     for (name, reg) in registry.iter() {

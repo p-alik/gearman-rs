@@ -31,3 +31,28 @@ tokio = { version = "1", features = ["full"] }
 tokio-test = "0.4"
 anyhow = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rustls-pemfile = "2"
+
+[[example]]
+name = "client_submit"
+required-features = ["client"]
+
+[[example]]
+name = "worker_reverse"
+required-features = ["worker"]
+
+[[test]]
+name = "client_integration"
+required-features = ["client"]
+
+[[test]]
+name = "client_worker_roundtrip"
+required-features = ["client", "worker"]
+
+[[test]]
+name = "admin_integration"
+required-features = ["client", "worker", "admin"]
+
+[[test]]
+name = "tls_integration"
+required-features = ["client", "tls"]

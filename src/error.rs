@@ -43,6 +43,9 @@ pub enum GearmanError {
     #[error("unparseable admin protocol response line: {line:?}")]
     AdminProtocolError { line: String },
 
+    #[error("invalid TLS server name: {host:?}")]
+    InvalidServerName { host: String },
+
     #[error("operation timed out")]
     Timeout,
 }
