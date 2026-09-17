@@ -80,15 +80,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- `SUBMIT_REDUCE_JOB[_BACKGROUND]`'s argument count was wrong (4, not 5)
-  from the initial protocol research, based on reading only the specific
-  field accesses in the server's reduce-job handler rather than the
-  authoritative `gearmand_command_info_list` table in
-  `libgearman/command.cc` (`argc=4, data=true` → 5 total fields:
-  `FUNC\0UNIQ\0REDUCER\0UNUSED\0ARGS`). Caught by the `GrabMode::All`
-  integration test hanging — the client's `SUBMIT_REDUCE_JOB` packet was
-  malformed enough that gearmand never replied at all, rather than
-  rejecting it outright, so no error surfaced; only a raw byte-level probe
-  against the real server (bypassing the `Client`/`Worker` abstractions)
-  pinned it down. All other packet types' field counts were re-verified
-  against the same table and were already correct.
+- Nothing in this release. (A prior version of this entry claimed
+  `SUBMIT_REDUCE_JOB[_BACKGROUND]`'s argument count had been wrong since
+  Phase 1 and was corrected here; that claim was checked against the
+  actual `arg_count` match arm across every commit and found to be
+  false — the arm has read `SubmitReduceJob | SubmitReduceJobBackground |
+  JobAssignAll | StatusRes => 5` unchanged since the very first commit.
+  The Phase 4d change only reworded the doc comment above `arg_count` to
+  cite the authoritative `gearmand_command_info_list` table in
+  `libgearman/command.cc` instead of the `libgearman-1.0/protocol.h`
+  inline comments; no code changed.)

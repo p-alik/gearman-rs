@@ -378,14 +378,15 @@ async fn run_server_actor(
         match crate::net::connect(&addr, &transport).await {
             Ok(mut conn) => {
                 let ready = if with_exceptions {
-                    let opt_pkt = Packet::request(
-                        PacketType::OptionReq,
-                        vec![Bytes::from_static(b"exceptions")],
-                    );
-                    match conn.send(opt_pkt).await {
-                        Ok(()) => true,
+                    match negotiate_exceptions(&mut conn).await {
+                        Ok(supported) => {
+                            if !supported {
+                                tracing::warn!(server = %addr, "server rejected OPTION_REQ exceptions; continuing without exception events");
+                            }
+                            true
+                        }
                         Err(e) => {
-                            tracing::warn!(server = %addr, error = %e, "failed to send OPTION_REQ exceptions");
+                            tracing::warn!(server = %addr, error = %e, "failed negotiating OPTION_REQ exceptions");
                             false
                         }
                     }
@@ -415,6 +416,45 @@ async fn run_server_actor(
     }
 }
 
+/// Sends `OPTION_REQ "exceptions"` and consumes its reply before the
+/// connection is handed to [`actor_loop`], so the reply never has a chance
+/// to be misattributed to an unrelated request via `pending_replies`.
+/// Returns whether the server acknowledged the option.
+async fn negotiate_exceptions(
+    conn: &mut Connection<BoxedStream>,
+) -> Result<bool> {
+    let opt_pkt = Packet::request(
+        PacketType::OptionReq,
+        vec![Bytes::from_static(b"exceptions")],
+    );
+    conn.send(opt_pkt).await?;
+
+    match conn.recv().await? {
+        Some(packet) if packet.ptype == PacketType::OptionRes => Ok(true),
+        Some(packet) if packet.ptype == PacketType::Error => {
+            let code = packet.arg_str(0).unwrap_or_default().to_string();
+            let text = packet.arg_str(1).unwrap_or_default().to_string();
+            tracing::debug!(
+                code,
+                text,
+                "OPTION_REQ exceptions rejected by server"
+            );
+            Ok(false)
+        }
+        Some(other) => {
+            tracing::debug!(ptype = ?other.ptype, "unexpected reply to OPTION_REQ");
+            Ok(false)
+        }
+        None => Err(GearmanError::ConnectionClosed),
+    }
+}
+
+/// How often to sweep `job_events` for entries whose `JobEventStream` was
+/// dropped without the job ever reaching a terminal state on this
+/// connection (e.g. the caller timed out waiting) — otherwise those entries
+/// and their senders live for the life of the connection.
+const JOB_EVENTS_PRUNE_INTERVAL: Duration = Duration::from_secs(30);
+
 async fn actor_loop(
     conn: &mut Connection<BoxedStream>,
     cmd_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
@@ -422,9 +462,15 @@ async fn actor_loop(
     let mut pending_replies: VecDeque<PendingReply> = VecDeque::new();
     let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> =
         HashMap::new();
+    let mut prune_interval = tokio::time::interval(JOB_EVENTS_PRUNE_INTERVAL);
+    prune_interval
+        .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let outcome = loop {
         tokio::select! {
+            _ = prune_interval.tick() => {
+                job_events.retain(|_, sender| !sender.is_closed());
+            }
             cmd = cmd_rx.recv() => {
                 match cmd {
                     None => break ActorOutcome::ClientDropped,
@@ -619,5 +665,36 @@ fn parse_status_res_unique(packet: &Packet) -> JobStatus {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0),
         client_count: packet.arg_str(5).and_then(|s| s.parse().ok()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Unit-tests the exact `retain` call `actor_loop`'s periodic sweep
+    /// runs (see `JOB_EVENTS_PRUNE_INTERVAL`), in isolation from the timer
+    /// that drives it — waiting out the real 30s interval in an integration
+    /// test would be both slow and not actually exercise different logic
+    /// than this. A caller dropping its `JobEventStream` early (e.g. via a
+    /// timeout) before the job reaches a terminal state closes the
+    /// channel's receiver; the sender must be pruned on the next sweep
+    /// rather than living for the rest of the connection.
+    #[test]
+    fn closed_job_event_senders_get_pruned() {
+        let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> =
+            HashMap::new();
+
+        let (still_open_tx, _still_open_rx) = mpsc::unbounded_channel();
+        job_events.insert("H:open:1".to_string(), still_open_tx);
+
+        let (dropped_tx, dropped_rx) = mpsc::unbounded_channel();
+        job_events.insert("H:dropped:1".to_string(), dropped_tx);
+        drop(dropped_rx); // simulates an early-dropped JobEventStream
+
+        job_events.retain(|_, sender| !sender.is_closed());
+
+        assert!(job_events.contains_key("H:open:1"));
+        assert!(!job_events.contains_key("H:dropped:1"));
     }
 }

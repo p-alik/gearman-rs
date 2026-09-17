@@ -2,7 +2,8 @@
 //! C sources' `PROTOCOL` file (lines 613-716): a worker registers for
 //! "reverse", a client submits job "test", and the worker replies "tset".
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
+use gearman::error::GearmanError;
 use gearman::protocol::{GearmanCodec, Packet, PacketMagic, PacketType};
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -246,6 +247,56 @@ fn decoder_rejects_oversized_payload() {
     bytes.extend_from_slice(&100u32.to_be_bytes()); // declared len 100, over the 4-byte cap
     let mut buf = BytesMut::from(&bytes[..]);
     assert!(codec.decode(&mut buf).is_err());
+}
+
+/// `CAN_DO` takes exactly one argument; `Packet::request`'s `debug_assert_eq!`
+/// only catches this in debug builds, so `encode` itself must reject it too
+/// (constructing via the struct literal, not `Packet::request`, to bypass
+/// that debug assert and exercise `encode`'s own check).
+#[test]
+fn encoder_rejects_wrong_arg_count() {
+    let mut codec = GearmanCodec::new();
+    let mut buf = BytesMut::new();
+    let pkt = Packet {
+        magic: PacketMagic::Req,
+        ptype: PacketType::CanDo,
+        args: vec![Bytes::from_static(b"foo"), Bytes::from_static(b"bar")],
+    };
+    let err = codec
+        .encode(pkt, &mut buf)
+        .expect_err("wrong argument count must be rejected");
+    assert!(
+        matches!(
+            err,
+            GearmanError::WrongArgCount {
+                ptype: PacketType::CanDo,
+                expected: 1,
+                actual: 2,
+            }
+        ),
+        "unexpected error: {err:?}"
+    );
+}
+
+/// `encode` must enforce the same payload cap as `decode`, not just trust
+/// the caller — otherwise a body that overflows `u32` on encode would wrap
+/// the wire length header instead of erroring.
+#[test]
+fn encoder_rejects_oversized_payload() {
+    let mut codec = GearmanCodec::with_max_payload_size(4);
+    let mut buf = BytesMut::new();
+    let pkt = Packet {
+        magic: PacketMagic::Req,
+        ptype: PacketType::CanDo,
+        args: vec![Bytes::from_static(b"reverse")], // 7 bytes > 4-byte cap
+    };
+    let err = codec
+        .encode(pkt, &mut buf)
+        .expect_err("oversized payload must be rejected");
+    assert!(
+        matches!(err, GearmanError::PayloadTooLarge(4)),
+        "unexpected error: {err:?}"
+    );
 }
 
 /// The opaque last argument of WORK_COMPLETE must survive embedded NUL

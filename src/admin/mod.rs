@@ -13,12 +13,18 @@
 //! used to build this module.
 
 use tokio::io::{
-    split, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader,
-    ReadHalf, WriteHalf,
+    split, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt,
+    BufReader, ReadHalf, WriteHalf,
 };
 use tokio::net::{TcpStream, ToSocketAddrs};
 
 use crate::error::{GearmanError, Result};
+
+/// Cap on a single admin-protocol response line, guarding against a
+/// misbehaving or hostile peer that withholds the terminating `\n` from
+/// growing `read_line`'s buffer without bound — the binary codec has an
+/// equivalent guard (`GearmanCodec::max_payload_size`) for the same reason.
+const MAX_ADMIN_LINE_LEN: usize = 64 * 1024;
 
 pub struct AdminClient<S = TcpStream> {
     reader: BufReader<ReadHalf<S>>,
@@ -54,9 +60,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AdminClient<S> {
 
     async fn read_line(&mut self) -> Result<String> {
         let mut line = String::new();
-        let n = self.reader.read_line(&mut line).await?;
+        let n = (&mut self.reader)
+            .take(MAX_ADMIN_LINE_LEN as u64)
+            .read_line(&mut line)
+            .await?;
         if n == 0 {
             return Err(GearmanError::ConnectionClosed);
+        }
+        if !line.ends_with('\n')
+            && line.len() as u64 >= MAX_ADMIN_LINE_LEN as u64
+        {
+            return Err(GearmanError::AdminLineTooLong(MAX_ADMIN_LINE_LEN));
         }
         while line.ends_with(['\n', '\r']) {
             line.pop();

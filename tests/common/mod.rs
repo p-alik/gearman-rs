@@ -84,3 +84,60 @@ fn which(bin: &str) -> Option<PathBuf> {
         })
     })
 }
+
+use std::sync::{Arc, Mutex};
+use tracing_subscriber::layer::{Context, SubscriberExt};
+use tracing_subscriber::Layer;
+
+/// Captures formatted `tracing` event messages emitted on the current
+/// thread, for tests that need to assert a specific diagnostic actually
+/// fired rather than just that behavior recovered (which can be identical
+/// whether or not the diagnostic exists). Keep the returned
+/// `DefaultGuard` alive for as long as events should be captured — it
+/// resets the thread's subscriber back to default on drop.
+#[derive(Clone, Default)]
+pub struct LogCapture(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+impl LogCapture {
+    pub fn install() -> (Self, tracing::subscriber::DefaultGuard) {
+        let capture = Self::default();
+        let subscriber = tracing_subscriber::registry().with(capture.clone());
+        let guard = tracing::subscriber::set_default(subscriber);
+        (capture, guard)
+    }
+
+    pub fn contains(&self, level: tracing::Level, needle: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(l, m)| *l == level && m.contains(needle))
+    }
+
+    pub fn messages(&self) -> Vec<(tracing::Level, String)> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl<S: tracing::Subscriber> Layer<S> for LogCapture {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        struct MessageVisitor(String);
+        impl tracing::field::Visit for MessageVisitor {
+            fn record_debug(
+                &mut self,
+                field: &tracing::field::Field,
+                value: &dyn std::fmt::Debug,
+            ) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        let mut visitor = MessageVisitor(String::new());
+        event.record(&mut visitor);
+        self.0
+            .lock()
+            .unwrap()
+            .push((*event.metadata().level(), visitor.0));
+    }
+}

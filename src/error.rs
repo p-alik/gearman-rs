@@ -22,6 +22,15 @@ pub enum GearmanError {
         reason: &'static str,
     },
 
+    #[error(
+        "wrong argument count for {ptype:?}: expected {expected}, got {actual}"
+    )]
+    WrongArgCount {
+        ptype: PacketType,
+        expected: usize,
+        actual: usize,
+    },
+
     #[error("job server returned error {code}: {text}")]
     ServerError { code: String, text: String },
 
@@ -42,6 +51,9 @@ pub enum GearmanError {
 
     #[error("unparseable admin protocol response line: {line:?}")]
     AdminProtocolError { line: String },
+
+    #[error("admin protocol line exceeded {0} bytes without a terminator")]
+    AdminLineTooLong(usize),
 
     #[error("invalid TLS server name: {host:?}")]
     InvalidServerName { host: String },

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch, RwLock};
 use tokio::task::JoinSet;
 
 use crate::error::Result;
@@ -124,8 +124,9 @@ impl WorkerBuilder {
     }
 
     pub fn run(self) -> Worker {
-        let registry = Arc::new(self.registry);
+        let registry = Arc::new(RwLock::new(self.registry));
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (unregister_tx, _) = broadcast::channel(16);
         let mut tasks = JoinSet::new();
 
         for addr in &self.servers {
@@ -136,11 +137,17 @@ impl WorkerBuilder {
                     self.grab_mode,
                     shutdown_rx.clone(),
                     self.transport.clone(),
+                    unregister_tx.subscribe(),
                 ));
             }
         }
 
-        Worker { shutdown_tx, tasks }
+        Worker {
+            shutdown_tx,
+            tasks,
+            registry,
+            unregister_tx,
+        }
     }
 }
 
@@ -153,11 +160,23 @@ impl Default for WorkerBuilder {
 pub struct Worker {
     shutdown_tx: watch::Sender<bool>,
     tasks: JoinSet<()>,
+    registry: Arc<RwLock<Registry>>,
+    unregister_tx: broadcast::Sender<String>,
 }
 
 impl Worker {
     pub fn builder() -> WorkerBuilder {
         WorkerBuilder::new()
+    }
+
+    /// Stops advertising `function` to every connected server: removes it
+    /// from the shared registry (so reconnects stop re-sending its
+    /// `CAN_DO`, and any job for it grabbed after this call is failed back
+    /// as unregistered) and notifies every live grab-loop connection to
+    /// send `CANT_DO`. A no-op if `function` was never registered.
+    pub async fn unregister(&self, function: &str) {
+        self.registry.write().await.remove(function);
+        let _ = self.unregister_tx.send(function.to_string());
     }
 
     /// Signals every grab-loop to stop once its current job (if any)
@@ -166,7 +185,11 @@ impl Worker {
     /// worker to abort work it already accepted.
     pub async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
-        while self.tasks.join_next().await.is_some() {}
+        while let Some(result) = self.tasks.join_next().await {
+            if let Err(e) = result {
+                tracing::error!(error = %e, "worker grab-loop task ended abnormally");
+            }
+        }
     }
 }
 
@@ -180,10 +203,11 @@ enum LoopOutcome {
 /// then runs the grab loop until the connection drops or shutdown fires.
 async fn run_worker_connection(
     addr: String,
-    registry: Arc<Registry>,
+    registry: Arc<RwLock<Registry>>,
     grab_mode: GrabMode,
     mut shutdown_rx: watch::Receiver<bool>,
     transport: Transport,
+    mut unregister_rx: broadcast::Receiver<String>,
 ) {
     let mut backoff = Duration::from_millis(100);
     const MAX_BACKOFF: Duration = Duration::from_secs(30);
@@ -197,7 +221,9 @@ async fn run_worker_connection(
             Ok(conn) => conn,
             Err(e) => {
                 tracing::warn!(server = %addr, error = %e, "failed to connect to job server");
-                tokio::time::sleep(backoff).await;
+                if interruptible_backoff(backoff, &mut shutdown_rx).await {
+                    return;
+                }
                 backoff = (backoff * 2).min(MAX_BACKOFF);
                 continue;
             }
@@ -205,29 +231,58 @@ async fn run_worker_connection(
 
         if let Err(e) = register_functions(&mut conn, &registry).await {
             tracing::warn!(server = %addr, error = %e, "failed to register functions");
-            tokio::time::sleep(backoff).await;
+            if interruptible_backoff(backoff, &mut shutdown_rx).await {
+                return;
+            }
             backoff = (backoff * 2).min(MAX_BACKOFF);
             continue;
         }
         backoff = Duration::from_millis(100);
 
+        // Discard any unregister notifications queued before this
+        // connection registered its functions — it never advertised them,
+        // so there's nothing to send CANT_DO for.
+        while unregister_rx.try_recv().is_ok() {}
+
         let conn: SharedConnection = Arc::new(tokio::sync::Mutex::new(conn));
-        match run_grab_loop(&conn, &registry, grab_mode, &mut shutdown_rx).await
+        match run_grab_loop(
+            &conn,
+            &registry,
+            grab_mode,
+            &mut shutdown_rx,
+            &mut unregister_rx,
+        )
+        .await
         {
             LoopOutcome::ShuttingDown => return,
             LoopOutcome::ConnectionLost => {
-                tokio::time::sleep(backoff).await;
+                if interruptible_backoff(backoff, &mut shutdown_rx).await {
+                    return;
+                }
                 backoff = (backoff * 2).min(MAX_BACKOFF);
             }
         }
     }
 }
 
+/// Sleeps for `duration`, interruptible by shutdown. Returns `true` if
+/// shutdown fired before the sleep elapsed, in which case the caller should
+/// stop rather than continue reconnecting.
+async fn interruptible_backoff(
+    duration: Duration,
+    shutdown_rx: &mut watch::Receiver<bool>,
+) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => false,
+        _ = shutdown_rx.changed() => true,
+    }
+}
+
 async fn register_functions(
     conn: &mut Connection<BoxedStream>,
-    registry: &Registry,
+    registry: &RwLock<Registry>,
 ) -> Result<()> {
-    for (name, reg) in registry.iter() {
+    for (name, reg) in registry.read().await.iter() {
         let packet = match reg.timeout {
             Some(timeout) => Packet::request(
                 PacketType::CanDoTimeout,
@@ -256,13 +311,18 @@ async fn recv_packet(conn: &SharedConnection) -> Result<Option<Packet>> {
 
 async fn run_grab_loop(
     conn: &SharedConnection,
-    registry: &Arc<Registry>,
+    registry: &Arc<RwLock<Registry>>,
     grab_mode: GrabMode,
     shutdown_rx: &mut watch::Receiver<bool>,
+    unregister_rx: &mut broadcast::Receiver<String>,
 ) -> LoopOutcome {
     loop {
         if *shutdown_rx.borrow() {
             return LoopOutcome::ShuttingDown;
+        }
+
+        if !flush_unregistrations(conn, unregister_rx).await {
+            return LoopOutcome::ConnectionLost;
         }
 
         let grab_type = match grab_mode {
@@ -303,7 +363,11 @@ async fn run_grab_loop(
                 tokio::select! {
                     result = recv_packet(conn) => {
                         match result {
-                            Ok(Some(_)) => continue,
+                            Ok(Some(pkt)) if pkt.ptype == PacketType::Noop => continue,
+                            Ok(Some(pkt)) => {
+                                tracing::warn!(ptype = ?pkt.ptype, "expected NOOP wake-up, got unexpected packet while sleeping");
+                                continue;
+                            }
                             Ok(None) | Err(_) => return LoopOutcome::ConnectionLost,
                         }
                     }
@@ -317,9 +381,33 @@ async fn run_grab_loop(
     }
 }
 
+/// Non-blocking drain of any `Worker::unregister` notifications queued
+/// since the last check, sending `CANT_DO` for each. Returns `false` if the
+/// connection died while sending.
+async fn flush_unregistrations(
+    conn: &SharedConnection,
+    unregister_rx: &mut broadcast::Receiver<String>,
+) -> bool {
+    loop {
+        match unregister_rx.try_recv() {
+            Ok(function) => {
+                let packet = Packet::request(
+                    PacketType::CantDo,
+                    vec![Bytes::copy_from_slice(function.as_bytes())],
+                );
+                if send_packet(conn, packet).await.is_err() {
+                    return false;
+                }
+            }
+            Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+            Err(_) => return true,
+        }
+    }
+}
+
 async fn dispatch_job(
     conn: &SharedConnection,
-    registry: &Arc<Registry>,
+    registry: &Arc<RwLock<Registry>>,
     pkt: Packet,
 ) {
     let handle = pkt.arg_str(0).unwrap_or_default().to_string();
@@ -338,7 +426,12 @@ async fn dispatch_job(
         _ => (None, None, pkt.args.get(2).cloned().unwrap_or_default()),
     };
 
-    let Some(reg) = registry.get(&function) else {
+    let handler = registry
+        .read()
+        .await
+        .get(&function)
+        .map(|reg| reg.handler.clone());
+    let Some(handler) = handler else {
         tracing::warn!(function, "grabbed a job for an unregistered function");
         let _ = send_packet(
             conn,
@@ -364,7 +457,7 @@ async fn dispatch_job(
         reporter,
     };
 
-    let response = match reg.handler.run(job).await {
+    let response = match handler.run(job).await {
         Ok(payload) => Packet::request(
             PacketType::WorkComplete,
             vec![Bytes::copy_from_slice(handle.as_bytes()), payload],

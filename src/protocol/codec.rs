@@ -82,7 +82,20 @@ impl Encoder<Packet> for GearmanCodec {
         pkt: Packet,
         dst: &mut BytesMut,
     ) -> Result<(), GearmanError> {
+        let expected = pkt.ptype.arg_count();
+        if pkt.args.len() != expected {
+            return Err(GearmanError::WrongArgCount {
+                ptype: pkt.ptype,
+                expected,
+                actual: pkt.args.len(),
+            });
+        }
+
         let body_len = pkt.encoded_body_len();
+        if body_len > self.max_payload_size as usize {
+            return Err(GearmanError::PayloadTooLarge(self.max_payload_size));
+        }
+
         dst.reserve(HEADER_LEN + body_len);
         dst.extend_from_slice(&pkt.magic.bytes());
         dst.extend_from_slice(&u32::from(pkt.ptype).to_be_bytes());

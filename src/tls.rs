@@ -36,13 +36,49 @@ impl TlsConfig {
 }
 
 /// Derives the TLS server name (for SNI and certificate verification) from
-/// a `host:port` address string.
+/// a `host:port` address string. `host` may be a bracketed IPv6 literal
+/// (`[::1]:4730`), matching what `std::net::ToSocketAddrs` accepts for the
+/// same string — the brackets are stripped since they're wire/URL syntax,
+/// not part of the address `rustls::pki_types::ServerName` expects.
 #[allow(dead_code)]
 pub(crate) fn server_name(addr: &str) -> Result<ServerName<'static>> {
     let host = addr.rsplit_once(':').map_or(addr, |(host, _)| host);
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
     ServerName::try_from(host.to_string()).map_err(|_| {
         GearmanError::InvalidServerName {
             host: host.to_string(),
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_port_from_plain_host() {
+        let name = server_name("gearman.example.com:4730").unwrap();
+        let expected =
+            ServerName::try_from("gearman.example.com".to_string()).unwrap();
+        assert_eq!(name, expected);
+    }
+
+    /// The bug this guards against: `rsplit_once(':')` alone leaves the
+    /// brackets in (`"[::1]"`), which `ServerName::try_from` rejects for
+    /// both its IP-address and DNS-name variants, even though
+    /// `std::net::ToSocketAddrs` accepts the same `"[::1]:4730"` string.
+    #[test]
+    fn strips_brackets_from_ipv6_literal() {
+        let name = server_name("[::1]:4730").unwrap();
+        let expected = ServerName::try_from("::1".to_string()).unwrap();
+        assert_eq!(name, expected);
+    }
+
+    #[test]
+    fn rejects_unparseable_host() {
+        assert!(server_name("not a valid host:4730").is_err());
+    }
 }

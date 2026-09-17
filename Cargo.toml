@@ -56,3 +56,23 @@ required-features = ["client", "worker", "admin"]
 [[test]]
 name = "tls_integration"
 required-features = ["client", "tls"]
+
+[[test]]
+name = "client_fake_server"
+required-features = ["client"]
+
+[[test]]
+name = "worker_fake_server"
+required-features = ["worker"]
+
+[[test]]
+name = "admin_fake_server"
+required-features = ["admin"]
+
+[[test]]
+name = "worker_panic_shutdown"
+required-features = ["worker"]
+
+[[test]]
+name = "worker_backoff_shutdown"
+required-features = ["worker"]
