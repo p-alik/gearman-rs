@@ -31,8 +31,8 @@ jobs:
       - name: Build gearmand
         run: |
           sudo apt-get update
-          sudo apt-get install -y libboost-all-dev libevent-dev gperf libssl-dev
-          cd gearmand-c && ./bootstrap.sh && ./configure --enable-ssl && make -j"$(nproc)"
+          sudo apt-get install -y libboost-all-dev libevent-dev gperf libssl-dev uuid-dev
+          cd gearmand-c && ./bootstrap.sh && ./configure --enable-ssl && make -j"$(nproc)" gearmand/gearmand
           # bootstrap.sh's own internal configure sanity-check can fail
           # (e.g. a missing build dep) without making bootstrap.sh itself
           # exit non-zero, so a broken build here would otherwise pass
@@ -68,8 +68,8 @@ jobs:
       - name: Build gearmand
         run: |
           sudo apt-get update
-          sudo apt-get install -y libboost-all-dev libevent-dev gperf libssl-dev
-          cd gearmand-c && ./bootstrap.sh && ./configure --enable-ssl && make -j"$(nproc)"
+          sudo apt-get install -y libboost-all-dev libevent-dev gperf libssl-dev uuid-dev
+          cd gearmand-c && ./bootstrap.sh && ./configure --enable-ssl && make -j"$(nproc)" gearmand/gearmand
           test -x gearmand/gearmand || { echo "::error::gearmand did not build"; exit 1; }
           echo "$PWD" >> "$GITHUB_PATH"
       - run: cargo llvm-cov --all-features --lcov --output-path lcov.info
