@@ -26,3 +26,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   for integration tests (soft-skips if none is found locally).
 - `examples/client_submit.rs`: background submit + status polling against a
   real `gearmand`.
+- `Worker`/`WorkerBuilder`: registers `JobHandler`s (or plain async
+  closures) per function name via `CAN_DO`/`CAN_DO_TIMEOUT`, runs
+  `concurrency` independent grab-loop tasks per server (each its own
+  connection, since Gearman allows only one job in flight per `GRAB_JOB`
+  cycle on a connection) defaulting to `GRAB_JOB_UNIQ` with a `GrabMode`
+  opt-out to plain `GRAB_JOB`, and reports `WORK_COMPLETE`/`WORK_FAIL`/
+  `WORK_EXCEPTION` from the handler's result. `Reporter` lets a handler
+  send `WORK_STATUS`/`WORK_DATA`/`WORK_WARNING` while it runs. Graceful
+  `Worker::shutdown` lets each grab-loop finish its current job (there is
+  no mid-job cancellation on the wire) before exiting.
+- `tests/client_worker_roundtrip.rs`: full client+worker round trip against
+  a real `gearmand`, including the "reverse" scenario from the `PROTOCOL`
+  worked example byte-for-byte, worker failure, background+poll,
+  concurrent jobs, and graceful shutdown.
+- `examples/worker_reverse.rs`: a running worker for the "reverse"
+  function.

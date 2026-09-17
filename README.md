@@ -13,7 +13,7 @@ implemented so far.
 |---|---|
 | Wire codec (framing, packet types, args) | done |
 | Client: submit / status | done |
-| Worker: register / grab / respond | planned |
+| Worker: register / grab / respond | done |
 | Admin text protocol | planned (stretch) |
 | TLS | planned (stretch) |
 | `SUBMIT_JOB_EPOCH` | planned (stretch) |
