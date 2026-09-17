@@ -23,6 +23,24 @@ implemented so far.
 The protocol reference used to build this crate is the `PROTOCOL` file in
 the [gearmand](https://github.com/gearman/gearmand) C sources.
 
+## MSRV
+
+`client`, `worker`, and `admin` support Rust 1.75, checked in CI.
+
+`tls` does not: it pulls in rustls's `aws-lc-rs` crypto backend, which
+depends on `zeroize`. `aws-lc-rs`/`rustls` themselves declare MSRV 1.71, but
+`zeroize` 1.9.0 requires edition2024 (Rust 1.85+) — a minor-version release
+raising its own MSRV, which is within the Rust ecosystem's usual semver
+convention (documented by many crates as "MSRV bumps are non-breaking") but
+still means `--all-features` needs Rust 1.85+ in practice. Since
+`Cargo.lock` isn't committed, this floats to whatever's newest at build
+time. We haven't reported this upstream — it isn't a bug in `aws-lc-rs` or
+`zeroize` under that convention, it's a widely-hit, already-known pattern
+(many other crates have independently worked around the same thing), and we
+have full control over the outcome locally regardless. If it becomes a
+problem, the options are: pin `zeroize` to `<1.9` ourselves, bump this
+crate's own MSRV, or keep scoping the CI `tls` gap as done today.
+
 ## Development
 
 ```sh

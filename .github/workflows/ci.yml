@@ -40,4 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.75
-      - run: cargo check --all-features
+      # Excludes `tls`: rustls's aws-lc-rs backend pulls in zeroize, whose
+      # latest release needs edition2024 (Rust 1.85+) regardless of the
+      # 1.75 MSRV this crate itself and aws-lc-rs/rustls both declare. See
+      # README.md#msrv for why we don't chase this upstream.
+      - run: cargo check --features client,worker,admin
