@@ -40,6 +40,9 @@ pub enum GearmanError {
     #[error("connection closed by peer")]
     ConnectionClosed,
 
+    #[error("unparseable admin protocol response line: {line:?}")]
+    AdminProtocolError { line: String },
+
     #[error("operation timed out")]
     Timeout,
 }

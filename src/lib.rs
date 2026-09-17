@@ -15,5 +15,8 @@ pub mod client;
 #[cfg(feature = "worker")]
 pub mod worker;
 
+#[cfg(feature = "admin")]
+pub mod admin;
+
 pub use conn::Connection;
 pub use error::{GearmanError, Result};

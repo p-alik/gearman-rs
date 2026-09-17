@@ -14,7 +14,7 @@ implemented so far.
 | Wire codec (framing, packet types, args) | done |
 | Client: submit / status | done |
 | Worker: register / grab / respond | done |
-| Admin text protocol | planned (stretch) |
+| Admin text protocol | done |
 | TLS | planned (stretch) |
 | `SUBMIT_JOB_EPOCH` | planned (stretch) |
 | `SUBMIT_REDUCE_JOB*` / `GRAB_JOB_ALL` | planned (stretch) |

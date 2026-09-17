@@ -42,3 +42,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   concurrent jobs, and graceful shutdown.
 - `examples/worker_reverse.rs`: a running worker for the "reverse"
   function.
+- `admin` feature: `AdminClient`, a line-oriented client for the Gearman
+  admin text protocol (same TCP port, dispatched by the server on the
+  first byte). Covers `status`, `workers`, `prioritystatus`, `show jobs`,
+  `show unique jobs`, `cancel job`, `create function`, `drop function`,
+  `maxqueue`, `getpid`, `verbose`, and `version`. Sends CRLF line endings:
+  gearmand's `create function` handler computes the function name length
+  assuming CRLF, and silently truncates the last character on a bare LF.
+  Verified against a real `gearmand`.
