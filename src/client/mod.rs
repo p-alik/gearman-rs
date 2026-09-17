@@ -118,22 +118,58 @@ impl Client {
         payload: impl Into<Bytes>,
         opts: SubmitOptions,
     ) -> Result<SubmittedJob> {
-        let server_index = self
-            .pool
-            .next_healthy()
-            .ok_or(GearmanError::NoServersAvailable)?;
-        let slot = self.pool.get(server_index);
-
         let ptype = submit_packet_type(opts.priority, opts.background);
         let args = vec![
             Bytes::copy_from_slice(function.as_bytes()),
             Bytes::from(unique.unwrap_or("").to_string()),
             payload.into(),
         ];
+        self.submit_packet(ptype, args, unique, opts.background)
+            .await
+    }
+
+    /// Schedules a job to become eligible for a worker to grab at or after
+    /// `epoch` (Unix seconds). Like `submit_bg`, this returns as soon as the
+    /// server acknowledges the job with `JOB_CREATED` — there is no
+    /// foreground/event-stream variant, since a client waiting on a
+    /// possibly-distant future completion isn't a sensible default. Poll
+    /// `get_status`/`get_status_unique` for completion.
+    pub async fn submit_epoch(
+        &self,
+        function: &str,
+        unique: Option<&str>,
+        epoch: u64,
+        payload: impl Into<Bytes>,
+    ) -> Result<JobHandle> {
+        let args = vec![
+            Bytes::copy_from_slice(function.as_bytes()),
+            Bytes::from(unique.unwrap_or("").to_string()),
+            Bytes::from(epoch.to_string()),
+            payload.into(),
+        ];
+        let submitted = self
+            .submit_packet(PacketType::SubmitJobEpoch, args, unique, true)
+            .await?;
+        Ok(submitted.handle)
+    }
+
+    async fn submit_packet(
+        &self,
+        ptype: PacketType,
+        args: Vec<Bytes>,
+        unique: Option<&str>,
+        background: bool,
+    ) -> Result<SubmittedJob> {
+        let server_index = self
+            .pool
+            .next_healthy()
+            .ok_or(GearmanError::NoServersAvailable)?;
+        let slot = self.pool.get(server_index);
+
         let packet = Packet::request(ptype, args);
 
         let (reply_tx, reply_rx) = oneshot::channel();
-        let (events_tx, events_rx) = if opts.background {
+        let (events_tx, events_rx) = if background {
             (None, None)
         } else {
             let (tx, rx) = mpsc::unbounded_channel();

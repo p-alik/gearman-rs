@@ -16,7 +16,7 @@ implemented so far.
 | Worker: register / grab / respond | done |
 | Admin text protocol | done |
 | TLS | done |
-| `SUBMIT_JOB_EPOCH` | planned (stretch) |
+| `SUBMIT_JOB_EPOCH` | done |
 | `SUBMIT_REDUCE_JOB*` / `GRAB_JOB_ALL` | planned (stretch) |
 | `SUBMIT_JOB_SCHED` | not planned — unused by gearmand itself |
 

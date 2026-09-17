@@ -67,3 +67,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   integration test that needs `client`/`worker`/`admin`/`tls`, so building
   or testing with a reduced feature set cleanly skips them instead of
   failing to compile.
+- `Client::submit_epoch`: schedules a job to become eligible for a worker
+  at or after a given Unix timestamp (`SUBMIT_JOB_EPOCH`). Like
+  `submit_bg`, it returns as soon as `JOB_CREATED` arrives — no
+  foreground/event-stream variant, since waiting on a possibly-distant
+  future completion isn't a sensible default. Verified against a real
+  `gearmand`.

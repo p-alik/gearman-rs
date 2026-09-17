@@ -92,3 +92,34 @@ async fn concurrent_submits_get_distinct_handles() {
         assert!(seen.insert(handle.as_str().to_string()), "duplicate handle");
     }
 }
+
+#[tokio::test]
+async fn submit_epoch_roundtrip() {
+    let Some(gearmand) = common::GearmandProcess::start() else {
+        return;
+    };
+
+    let client = ClientBuilder::new()
+        .servers([gearmand.addr.clone()])
+        .connect()
+        .await
+        .expect("client should connect");
+
+    let epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        + 3600;
+
+    let handle = client
+        .submit_epoch("reverse", None, epoch, Bytes::from_static(b"test"))
+        .await
+        .expect("epoch submit should succeed");
+
+    let status = client
+        .get_status(&handle)
+        .await
+        .expect("get_status should succeed");
+    assert!(status.known);
+    assert!(!status.running);
+}
