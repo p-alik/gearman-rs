@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
 description = "Native async Gearman protocol client and worker, built on tokio"
-repository = "https://github.com/apastuchov/gearman-rs"
+repository = "https://github.com/p-alik/gearman-rs"
 keywords = ["gearman", "job-queue", "distributed", "tokio"]
 categories = ["network-programming", "asynchronous"]
 
