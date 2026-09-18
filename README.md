@@ -52,13 +52,19 @@ cargo fmt --check
 ```
 
 On NixOS, the rustup-managed toolchain on `PATH` may fail to link with a
-`nix-support/ld-wrapper.sh: No such file or directory` error. If so, run the
-above through a clean nixpkgs toolchain instead:
-`nix-shell -p cargo rustc clippy rustfmt --run '<command>'`.
+`nix-support/ld-wrapper.sh: No such file or directory` error (a stale,
+garbage-collected Nix store reference in rustup's own toolchain). This repo
+ships a `flake.nix` devShell with a pinned, working Rust toolchain
+(`rust-overlay`) as a workaround:
+
+```sh
+nix develop
+```
 
 Integration tests spawn a real `gearmand` binary, found via the
 `GEARMAND_BIN` environment variable or on `PATH`; if none is found they are
-skipped with a notice rather than failing.
+skipped with a notice rather than failing. The devShell reports which one it
+found (if any) when it starts.
 
 ## License
 
