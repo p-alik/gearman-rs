@@ -36,7 +36,17 @@ jobs:
           # version below to track a newer gearmand release.
           mkdir gearmand-c
           curl -sL https://github.com/gearman/gearmand/releases/download/2.1.0/gearmand-2.1.0.tar.gz | tar xz -C gearmand-c --strip-components=1
-          cd gearmand-c && ./configure --enable-ssl && make -j"$(nproc)" gearmand/gearmand
+          # configmake.h is a BUILT_SOURCES target (Makefile.am):
+          # upstream's own `all` rule depends on it and recurses into
+          # `all-am` in a second, separate `make` invocation
+          # specifically so it's fully built before anything that
+          # #includes it. Requesting the gearmand/gearmand sub-target
+          # directly bypasses that "all" rule, so build it first as
+          # its own sequential step - passing both as goals to one
+          # `make -j` invocation would still let them race in the
+          # shared parallel job pool and intermittently fail with
+          # "configmake.h: No such file or directory".
+          cd gearmand-c && ./configure --enable-ssl && make configmake.h && make -j"$(nproc)" gearmand/gearmand
           # A broken build can leave `make` looking like it "ran" without
           # producing a binary, so check for the real thing rather than
           # trusting its exit code - otherwise every real-gearmand
@@ -75,7 +85,9 @@ jobs:
           sudo apt-get install -y libboost-all-dev libevent-dev gperf libssl-dev uuid-dev
           mkdir gearmand-c
           curl -sL https://github.com/gearman/gearmand/releases/download/2.1.0/gearmand-2.1.0.tar.gz | tar xz -C gearmand-c --strip-components=1
-          cd gearmand-c && ./configure --enable-ssl && make -j"$(nproc)" gearmand/gearmand
+          # See the `test` job for why configmake.h needs building in
+          # its own sequential step before the sub-target.
+          cd gearmand-c && ./configure --enable-ssl && make configmake.h && make -j"$(nproc)" gearmand/gearmand
           test -x gearmand/gearmand || { echo "::error::gearmand did not build"; exit 1; }
           echo "$PWD/gearmand" >> "$GITHUB_PATH"
       - run: cargo llvm-cov --all-features --lcov --output-path lcov.info
