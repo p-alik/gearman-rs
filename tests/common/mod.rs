@@ -8,7 +8,8 @@
 //! any one binary that isn't real — hence the blanket allow.
 #![allow(dead_code)]
 
-use std::net::TcpListener;
+use std::io::{BufRead, BufReader, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -42,7 +43,11 @@ impl GearmandProcess {
             .expect("failed to spawn gearmand");
 
         let addr = format!("127.0.0.1:{port}");
-        wait_for_ready(&addr);
+        // The admin text protocol's "OK"-reply round trip can't be spoken
+        // in plaintext once `--ssl` puts the whole port behind a TLS
+        // handshake, so fall back to a bare connect check for that case.
+        let uses_tls = extra_args.contains(&"--ssl");
+        wait_for_ready(&addr, uses_tls);
 
         Some(Self { child, addr })
     }
@@ -60,15 +65,45 @@ fn free_port() -> u16 {
     listener.local_addr().unwrap().port()
 }
 
-fn wait_for_ready(addr: &str) {
+fn wait_for_ready(addr: &str, uses_tls: bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if std::net::TcpStream::connect(addr).is_ok() {
+        let ready = if uses_tls {
+            TcpStream::connect(addr).is_ok()
+        } else {
+            probe_admin_protocol(addr)
+        };
+        if ready {
             return;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
     panic!("gearmand did not become ready at {addr} in time");
+}
+
+/// A real admin-protocol round trip, not just a bare TCP connect: gearmand's
+/// listening socket can complete a TCP handshake (and reset the very next
+/// connection moments later) before the server is actually ready to serve
+/// requests, so trusting `TcpStream::connect` alone as "ready" has let a
+/// freshly-started `gearmand` pass this check and then reset the caller's
+/// first real connection. Retrying a full `version` command here gives the
+/// caller the same resilience its own first request needs, instead of that
+/// request being the one to hit the race.
+fn probe_admin_protocol(addr: &str) -> bool {
+    let Ok(mut stream) = TcpStream::connect(addr) else {
+        return false;
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok();
+    if stream.write_all(b"version\r\n").is_err() {
+        return false;
+    }
+    let mut line = String::new();
+    matches!(
+        BufReader::new(stream).read_line(&mut line),
+        Ok(n) if n > 0 && line.starts_with("OK")
+    )
 }
 
 fn which(bin: &str) -> Option<PathBuf> {
