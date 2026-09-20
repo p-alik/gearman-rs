@@ -371,3 +371,125 @@ fn parse_i32(field: &str, line: &str) -> Result<i32> {
         line: line.to_string(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ack_line_ok_without_value() {
+        let result = parse_ack_line("OK".to_string()).expect("OK must parse");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn parse_ack_line_ok_with_value() {
+        let result = parse_ack_line("OK 1234".to_string()).expect("OK value must parse");
+        assert_eq!(result, Some("1234".to_string()));
+    }
+
+    #[test]
+    fn parse_ack_line_err_splits_code_and_text() {
+        let err = parse_ack_line("ERR unknown_command Unknown server command".to_string())
+            .expect_err("ERR must map to a server error");
+        match err {
+            GearmanError::ServerError { code, text } => {
+                assert_eq!(code, "unknown_command");
+                assert_eq!(text, "Unknown server command");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_ack_line_err_without_text() {
+        let err = parse_ack_line("ERR some_code".to_string())
+            .expect_err("ERR without text must still map to a server error");
+        match err {
+            GearmanError::ServerError { code, text } => {
+                assert_eq!(code, "some_code");
+                assert_eq!(text, "");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_ack_line_neither_ok_nor_err_is_a_protocol_error() {
+        let err = parse_ack_line("garbage".to_string())
+            .expect_err("a line that is neither OK nor ERR must be rejected");
+        assert!(matches!(err, GearmanError::AdminProtocolError { line } if line == "garbage"));
+    }
+
+    #[test]
+    fn parse_status_line_valid() {
+        let status = parse_status_line("reverse\t3\t1\t2").expect("valid line must parse");
+        assert_eq!(status.function, "reverse");
+        assert_eq!(status.total, 3);
+        assert_eq!(status.running, 1);
+        assert_eq!(status.worker_count, 2);
+    }
+
+    #[test]
+    fn parse_status_line_missing_field_is_rejected() {
+        let err = parse_status_line("reverse\t3\t1").expect_err("a short line must be rejected");
+        assert!(matches!(err, GearmanError::AdminProtocolError { .. }));
+    }
+
+    #[test]
+    fn parse_status_line_non_numeric_field_is_rejected() {
+        let err =
+            parse_status_line("reverse\tNaN\t1\t2").expect_err("a non-numeric field must fail");
+        assert!(matches!(err, GearmanError::AdminProtocolError { .. }));
+    }
+
+    #[test]
+    fn parse_priority_status_line_valid() {
+        let status =
+            parse_priority_status_line("reverse\t1\t2\t3\t4").expect("valid line must parse");
+        assert_eq!(status.function, "reverse");
+        assert_eq!(status.high, 1);
+        assert_eq!(status.normal, 2);
+        assert_eq!(status.low, 3);
+        assert_eq!(status.worker_count, 4);
+    }
+
+    #[test]
+    fn parse_job_list_line_flags_are_boolean() {
+        let entry = parse_job_list_line("H:lap:1\t0\t1\t0").expect("valid line must parse");
+        assert_eq!(entry.handle, "H:lap:1");
+        assert_eq!(entry.retries, 0);
+        assert!(entry.ignore_job);
+        assert!(!entry.queued);
+    }
+
+    #[test]
+    fn parse_worker_line_with_functions() {
+        let worker = parse_worker_line("42 127.0.0.1 client1 : reverse echo").expect("must parse");
+        assert_eq!(worker.fd, 42);
+        assert_eq!(worker.ip, "127.0.0.1");
+        assert_eq!(worker.client_id, "client1");
+        assert_eq!(worker.functions, vec!["reverse", "echo"]);
+    }
+
+    #[test]
+    fn parse_worker_line_without_functions() {
+        let worker = parse_worker_line("42 127.0.0.1 client1 :").expect("must parse");
+        assert!(worker.functions.is_empty());
+    }
+
+    #[test]
+    fn parse_worker_line_ipv6_address_is_not_mistaken_for_delimiter() {
+        let worker =
+            parse_worker_line("7 2001:db8::1 client1 : reverse").expect("IPv6 address must parse");
+        assert_eq!(worker.ip, "2001:db8::1");
+        assert_eq!(worker.functions, vec!["reverse"]);
+    }
+
+    #[test]
+    fn parse_worker_line_missing_delimiter_is_rejected() {
+        let err = parse_worker_line("42 127.0.0.1 client1 reverse")
+            .expect_err("a line without ' :' must be rejected");
+        assert!(matches!(err, GearmanError::AdminProtocolError { .. }));
+    }
+}

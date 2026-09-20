@@ -144,3 +144,60 @@ impl PacketType {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every wire code `PacketType` claims to decode must round-trip back
+    /// to the same numeric value, and vice versa — catches a transposed
+    /// number in the `TryFrom` match arms that the compiler's exhaustiveness
+    /// check wouldn't.
+    #[test]
+    fn try_from_u32_round_trips_for_every_variant() {
+        for code in 1..COMMAND_MAX {
+            if code == 5 {
+                continue; // GEARMAN_COMMAND_UNUSED: intentionally unassigned
+            }
+            let packet_type = PacketType::try_from(code)
+                .unwrap_or_else(|e| panic!("code {code} should decode: {e:?}"));
+            assert_eq!(u32::from(packet_type), code);
+        }
+    }
+
+    #[test]
+    fn try_from_u32_rejects_text_and_unused_codes() {
+        assert!(matches!(
+            PacketType::try_from(0),
+            Err(GearmanError::UnknownPacketType(0))
+        ));
+        assert!(matches!(
+            PacketType::try_from(5),
+            Err(GearmanError::UnknownPacketType(5))
+        ));
+    }
+
+    #[test]
+    fn try_from_u32_rejects_codes_at_and_past_command_max() {
+        assert!(matches!(
+            PacketType::try_from(COMMAND_MAX),
+            Err(GearmanError::UnknownPacketType(v)) if v == COMMAND_MAX
+        ));
+        assert!(matches!(
+            PacketType::try_from(COMMAND_MAX + 100),
+            Err(GearmanError::UnknownPacketType(_))
+        ));
+    }
+
+    #[test]
+    fn arg_count_matches_protocol_field_layout() {
+        assert_eq!(PacketType::Noop.arg_count(), 0);
+        assert_eq!(PacketType::EchoReq.arg_count(), 1);
+        assert_eq!(PacketType::WorkComplete.arg_count(), 2);
+        assert_eq!(PacketType::SubmitJob.arg_count(), 3);
+        assert_eq!(PacketType::SubmitJobEpoch.arg_count(), 4);
+        assert_eq!(PacketType::SubmitReduceJob.arg_count(), 5);
+        assert_eq!(PacketType::StatusResUnique.arg_count(), 6);
+        assert_eq!(PacketType::SubmitJobSched.arg_count(), 8);
+    }
+}
