@@ -1,5 +1,6 @@
 # gearman
 
+[![crates.io](https://img.shields.io/crates/v/gearman.svg)](https://crates.io/crates/gearman)
 [![codecov](https://codecov.io/gh/p-alik/gearman-rs/graph/badge.svg)](https://codecov.io/gh/p-alik/gearman-rs)
 
 Native async Rust implementation of the [Gearman](http://gearman.org/) binary
