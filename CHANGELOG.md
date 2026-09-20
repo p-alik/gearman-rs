@@ -5,6 +5,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-20
+
+### Fixed
+
+- `AdminClient::workers()`: `parse_worker_line` mistook an IP address
+  starting with `::` (e.g. IPv6 loopback `::1`) for the `FD IP CLIENT_ID :
+  FUNC1 FUNC2 ...` line's delimiter, since the field's leading space sits
+  right next to the address's own leading colon and a literal `" :"`
+  substring search matched there instead of the real delimiter. Now
+  tokenizes on whitespace and matches the delimiter as its own standalone
+  `:` token.
+- CI: the `test`/`coverage` jobs' real-`gearmand` fixture
+  (`tests/common::GearmandProcess`) could occasionally hit a
+  `ConnectionReset` on a test's first admin-protocol request, because its
+  readiness check only confirmed a bare TCP connect succeeded — which can
+  happen before `gearmand` is actually ready to serve requests. It now
+  retries a real `version` command round trip instead (falling back to
+  the old bare-connect check for `--ssl` mode, since the admin protocol's
+  plaintext line format isn't usable once the port is behind TLS).
+
 ## [0.1.0] - 2026-09-19
 
 ### Added
