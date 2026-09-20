@@ -334,22 +334,23 @@ fn parse_job_list_line(line: &str) -> Result<JobListEntry> {
 }
 
 /// `workers` line: `FD IP CLIENT_ID : FUNC1 FUNC2 ...` (functions may be
-/// absent). Split on the literal `" :"` rather than the first bare `:`, so
-/// an IPv6 address in the IP field doesn't get mistaken for the delimiter.
+/// absent). Tokenize on whitespace and match the delimiter as its own
+/// standalone `:` token, rather than searching for the literal substring
+/// `" :"` — an IPv6 address in the IP field (e.g. `::1`) can itself contain
+/// a `" :"` substring where the field's leading space meets the address's
+/// leading colon, which would be mistaken for the delimiter.
 fn parse_worker_line(line: &str) -> Result<WorkerInfo> {
-    let (prefix, functions_part) =
-        line.split_once(" :")
-            .ok_or_else(|| GearmanError::AdminProtocolError {
-                line: line.to_string(),
-            })?;
-    let mut fields = prefix.split_whitespace();
+    let mut fields = line.split_whitespace();
     let fd = parse_i32(next_field2(&mut fields, line)?, line)?;
     let ip = next_field2(&mut fields, line)?.to_string();
     let client_id = next_field2(&mut fields, line)?.to_string();
-    let functions = functions_part
-        .split_whitespace()
-        .map(str::to_string)
-        .collect();
+    let delimiter = next_field2(&mut fields, line)?;
+    if delimiter != ":" {
+        return Err(GearmanError::AdminProtocolError {
+            line: line.to_string(),
+        });
+    }
+    let functions = fields.map(str::to_string).collect();
     Ok(WorkerInfo {
         fd,
         ip,
@@ -483,6 +484,17 @@ mod tests {
         let worker =
             parse_worker_line("7 2001:db8::1 client1 : reverse").expect("IPv6 address must parse");
         assert_eq!(worker.ip, "2001:db8::1");
+        assert_eq!(worker.functions, vec!["reverse"]);
+    }
+
+    /// Regression test: a leading `" :"` inside the IP field (e.g. IPv6
+    /// loopback `::1`, where the field's leading space sits right next to
+    /// the address's leading colon) used to be mistaken for the `FD IP
+    /// CLIENT_ID : FUNCS` delimiter by a literal-substring search.
+    #[test]
+    fn parse_worker_line_ipv6_loopback_address_is_not_mistaken_for_delimiter() {
+        let worker = parse_worker_line("7 ::1 client1 : reverse").expect("must parse");
+        assert_eq!(worker.ip, "::1");
         assert_eq!(worker.functions, vec!["reverse"]);
     }
 
