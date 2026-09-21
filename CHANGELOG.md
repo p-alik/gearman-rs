@@ -5,6 +5,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-09-21
+
+### Added
+
+- Rustdoc for every public item (structs, enums, traits, fields, and
+  methods) that previously shipped without doc comments, including the
+  full `PacketType` wire-protocol enum.
+- `#![warn(missing_docs)]` in `lib.rs`, so future public API additions
+  without documentation are caught at compile time.
+
 ## [0.1.1] - 2026-09-20
 
 ### Fixed
