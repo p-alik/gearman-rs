@@ -14,6 +14,7 @@ pub struct Connection<S = TcpStream> {
 }
 
 impl Connection<TcpStream> {
+    /// Opens a TCP connection and wraps it with the Gearman binary codec.
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<Self> {
         let stream = TcpStream::connect(addr).await?;
         Ok(Self::from_stream(stream))
@@ -21,12 +22,15 @@ impl Connection<TcpStream> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
+    /// Wraps an already-established stream (e.g. a TLS stream) with the
+    /// Gearman binary codec.
     pub fn from_stream(stream: S) -> Self {
         Self {
             framed: Framed::new(stream, GearmanCodec::new()),
         }
     }
 
+    /// Encodes and writes a packet.
     pub async fn send(&mut self, packet: Packet) -> Result<()> {
         self.framed.send(packet).await
     }

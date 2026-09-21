@@ -26,12 +26,19 @@ use crate::error::{GearmanError, Result};
 /// equivalent guard (`GearmanCodec::max_payload_size`) for the same reason.
 const MAX_ADMIN_LINE_LEN: usize = 64 * 1024;
 
+/// A client for the Gearman admin text protocol.
+///
+/// Unlike [`crate::Connection`], this talks to the raw stream directly since
+/// the admin protocol's line-oriented framing is distinct from the binary
+/// packet protocol. See the module docs for details.
 pub struct AdminClient<S = TcpStream> {
     reader: BufReader<ReadHalf<S>>,
     writer: WriteHalf<S>,
 }
 
 impl AdminClient<TcpStream> {
+    /// Opens a TCP connection to a gearmand instance and wraps it as an
+    /// admin client.
     pub async fn connect<A: ToSocketAddrs>(addr: A) -> Result<Self> {
         let stream = TcpStream::connect(addr).await?;
         Ok(Self::from_stream(stream))
@@ -39,6 +46,7 @@ impl AdminClient<TcpStream> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> AdminClient<S> {
+    /// Wraps an already-established stream as an admin client.
     pub fn from_stream(stream: S) -> Self {
         let (reader, writer) = split(stream);
         Self {
@@ -204,6 +212,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AdminClient<S> {
     }
 }
 
+/// Target queue size for the `maxqueue` admin command.
 #[derive(Debug, Clone, Copy)]
 pub enum MaxQueueSize {
     /// Reset to the server's default queue size for all priorities.
@@ -211,39 +220,68 @@ pub enum MaxQueueSize {
     /// Apply the same limit to all priorities.
     Uniform(u32),
     /// Set each priority's queue limit independently.
-    PerPriority { high: u32, normal: u32, low: u32 },
+    PerPriority {
+        /// The high-priority queue limit.
+        high: u32,
+        /// The normal-priority queue limit.
+        normal: u32,
+        /// The low-priority queue limit.
+        low: u32,
+    },
 }
 
+/// One row of a `workers` admin response: an attached worker connection.
 #[derive(Debug, Clone)]
 pub struct WorkerInfo {
+    /// The connection's file descriptor number on the server.
     pub fd: i32,
+    /// The worker's peer IP address.
     pub ip: String,
+    /// The client id the worker set with `SET_CLIENT_ID`, if any.
     pub client_id: String,
+    /// The functions this worker registered with `CAN_DO`.
     pub functions: Vec<String>,
 }
 
+/// One row of a `status` admin response: job counts for a function.
 #[derive(Debug, Clone)]
 pub struct FunctionStatus {
+    /// The function name.
     pub function: String,
+    /// Total number of queued jobs (running or not) for this function.
     pub total: u64,
+    /// Number of jobs currently running for this function.
     pub running: u64,
+    /// Number of workers registered for this function.
     pub worker_count: u64,
 }
 
+/// One row of a `prioritystatus` admin response: queued job counts for a
+/// function, broken out by priority.
 #[derive(Debug, Clone)]
 pub struct PriorityFunctionStatus {
+    /// The function name.
     pub function: String,
+    /// Number of high-priority jobs queued for this function.
     pub high: u64,
+    /// Number of normal-priority jobs queued for this function.
     pub normal: u64,
+    /// Number of low-priority jobs queued for this function.
     pub low: u64,
+    /// Number of workers registered for this function.
     pub worker_count: u64,
 }
 
+/// One row of a `show jobs` admin response: a queued or running job.
 #[derive(Debug, Clone)]
 pub struct JobListEntry {
+    /// The job handle.
     pub handle: String,
+    /// Number of times this job has been retried.
     pub retries: u32,
+    /// Whether the job's return value is ignored by the client.
     pub ignore_job: bool,
+    /// Whether the job is still queued (as opposed to running).
     pub queued: bool,
 }
 

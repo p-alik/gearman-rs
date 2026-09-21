@@ -1,3 +1,6 @@
+//! The Gearman client role: submitting jobs to one or more job servers and
+//! tracking their progress. See [`Client`] and [`ClientBuilder`].
+
 mod job;
 mod multi;
 
@@ -21,6 +24,7 @@ use crate::Connection;
 
 use multi::{ServerPool, ServerSlot};
 
+/// Builds a [`Client`], configuring which servers it connects to and how.
 pub struct ClientBuilder {
     servers: Vec<String>,
     with_exceptions: bool,
@@ -28,6 +32,8 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// Starts a builder with no servers configured; call [`Self::servers`]
+    /// before [`Self::connect`].
     pub fn new() -> Self {
         Self {
             servers: Vec::new(),
@@ -36,6 +42,8 @@ impl ClientBuilder {
         }
     }
 
+    /// Sets the job server addresses (`host:port`) to connect to. The client
+    /// spawns one persistent connection per server.
     pub fn servers<I, S>(mut self, servers: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -100,16 +108,22 @@ impl Default for ClientBuilder {
     }
 }
 
+/// A handle to one or more Gearman job servers, used to submit jobs and
+/// query their status. Cheap to clone; clones share the same underlying
+/// connections.
 #[derive(Clone)]
 pub struct Client {
     pool: Arc<ServerPool>,
 }
 
 impl Client {
+    /// Starts a [`ClientBuilder`].
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
 
+    /// Submits a job with explicit [`SubmitOptions`] (priority and
+    /// foreground/background).
     pub async fn submit(
         &self,
         function: &str,
@@ -232,6 +246,8 @@ impl Client {
         self.submit_fg_unique(function, None, payload).await
     }
 
+    /// Like [`Client::submit_fg`], but with an explicit unique id for
+    /// deduplication against other jobs already queued for `function`.
     pub async fn submit_fg_unique(
         &self,
         function: &str,
@@ -265,6 +281,9 @@ impl Client {
         }
     }
 
+    /// Submits a background job, returning its handle as soon as the server
+    /// acknowledges it with `JOB_CREATED`. No `WORK_*` events are ever
+    /// delivered for a background job; poll [`Client::get_status`] instead.
     pub async fn submit_bg(&self, function: &str, payload: impl Into<Bytes>) -> Result<JobHandle> {
         let submitted = self
             .submit(function, None, payload, SubmitOptions::background())
@@ -272,6 +291,8 @@ impl Client {
         Ok(submitted.handle)
     }
 
+    /// Queries a job's status with `GET_STATUS`. Must be sent to the same
+    /// server that created the job (see [`JobHandle`]).
     pub async fn get_status(&self, handle: &JobHandle) -> Result<JobStatus> {
         let slot = self.pool.get(handle.server_index);
         let packet = Packet::request(
@@ -285,6 +306,9 @@ impl Client {
         rx.await.map_err(|_| GearmanError::ConnectionClosed)?
     }
 
+    /// Like [`Client::get_status`], but via `GET_STATUS_UNIQUE`, which also
+    /// reports `client_count`. Fails with [`GearmanError::NoUniqueId`] if
+    /// `handle` was created without a unique id.
     pub async fn get_status_unique(&self, handle: &JobHandle) -> Result<JobStatus> {
         let unique = handle
             .unique

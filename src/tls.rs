@@ -21,6 +21,8 @@ use crate::error::{GearmanError, Result};
 // is itself only compiled when the `client` or `worker` feature is also
 // enabled (that's the only place a `TlsConfig` can actually be used) — so a
 // `tls`-only build sees them as dead code without this.
+/// TLS settings for connecting to a job server, wrapping a caller-supplied
+/// `rustls::ClientConfig`.
 #[derive(Clone)]
 pub struct TlsConfig {
     #[allow(dead_code)]
@@ -28,6 +30,7 @@ pub struct TlsConfig {
 }
 
 impl TlsConfig {
+    /// Builds a [`TlsConfig`] from a `rustls::ClientConfig`.
     pub fn new(client_config: Arc<ClientConfig>) -> Self {
         Self {
             connector: TlsConnector::from(client_config),

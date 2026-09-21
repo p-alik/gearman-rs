@@ -1,3 +1,7 @@
+//! The Gearman worker role: registering functions and running the grab
+//! loop that executes jobs as they're assigned. See [`Worker`] and
+//! [`WorkerBuilder`].
+
 mod job;
 mod registry;
 
@@ -19,6 +23,8 @@ use crate::Connection;
 use job::SharedConnection;
 use registry::{RegisteredHandler, Registry};
 
+/// Which `GRAB_JOB*` variant a worker sends when asking the server for
+/// work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrabMode {
     /// `GRAB_JOB_UNIQ` (the default): the handler also receives the
@@ -34,6 +40,8 @@ pub enum GrabMode {
     All,
 }
 
+/// Builds a [`Worker`], configuring which servers it connects to, its
+/// concurrency, and the functions it handles.
 pub struct WorkerBuilder {
     servers: Vec<String>,
     concurrency: usize,
@@ -43,6 +51,8 @@ pub struct WorkerBuilder {
 }
 
 impl WorkerBuilder {
+    /// Starts a builder with no servers or functions registered, and
+    /// concurrency defaulted to the available parallelism.
     pub fn new() -> Self {
         Self {
             servers: Vec::new(),
@@ -55,6 +65,8 @@ impl WorkerBuilder {
         }
     }
 
+    /// Sets the job server addresses (`host:port`) to connect to. The
+    /// worker spawns `concurrency` grab-loop connections per server.
     pub fn servers<I, S>(mut self, servers: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -73,6 +85,7 @@ impl WorkerBuilder {
         self
     }
 
+    /// Sets which `GRAB_JOB*` variant to use. Defaults to [`GrabMode::Uniq`].
     pub fn grab_mode(mut self, mode: GrabMode) -> Self {
         self.grab_mode = mode;
         self
@@ -86,6 +99,8 @@ impl WorkerBuilder {
         self
     }
 
+    /// Registers a handler for `function`, advertised to the server with
+    /// `CAN_DO`.
     pub fn register<H>(mut self, function: impl Into<String>, handler: H) -> Self
     where
         H: JobHandler,
@@ -100,6 +115,8 @@ impl WorkerBuilder {
         self
     }
 
+    /// Like [`Self::register`], but advertised with `CAN_DO_TIMEOUT`, so the
+    /// server fails the job back if it isn't completed within `timeout`.
     pub fn register_with_timeout<H>(
         mut self,
         function: impl Into<String>,
@@ -119,6 +136,7 @@ impl WorkerBuilder {
         self
     }
 
+    /// Spawns the grab-loop connections and returns the running [`Worker`].
     pub fn run(self) -> Worker {
         let registry = Arc::new(RwLock::new(self.registry));
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -153,6 +171,8 @@ impl Default for WorkerBuilder {
     }
 }
 
+/// A running set of grab-loop connections, executing registered job
+/// handlers as work is assigned.
 pub struct Worker {
     shutdown_tx: watch::Sender<bool>,
     tasks: JoinSet<()>,
@@ -161,6 +181,7 @@ pub struct Worker {
 }
 
 impl Worker {
+    /// Starts a [`WorkerBuilder`].
     pub fn builder() -> WorkerBuilder {
         WorkerBuilder::new()
     }

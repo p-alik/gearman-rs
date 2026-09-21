@@ -8,48 +8,121 @@ use crate::error::GearmanError;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum PacketType {
+    /// `CAN_DO`: worker->server, registers a function the worker can
+    /// perform.
     CanDo = 1,
+    /// `CANT_DO`: worker->server, unregisters a previously registered
+    /// function.
     CantDo = 2,
+    /// `RESET_ABILITIES`: worker->server, unregisters every function.
     ResetAbilities = 3,
+    /// `PRE_SLEEP`: worker->server, signals the worker is about to wait for
+    /// a wake-up `NOOP` after a `NO_JOB` reply.
     PreSleep = 4,
+    /// `NOOP`: server->worker, wakes a worker that sent `PRE_SLEEP`.
     Noop = 6,
+    /// `SUBMIT_JOB`: client->server, submits a normal-priority foreground
+    /// job.
     SubmitJob = 7,
+    /// `JOB_CREATED`: server->client, acknowledges a submitted job with its
+    /// handle.
     JobCreated = 8,
+    /// `GRAB_JOB`: worker->server, requests a job with no unique id in the
+    /// assignment.
     GrabJob = 9,
+    /// `NO_JOB`: server->worker, no job is currently available for a
+    /// `GRAB_JOB*` request.
     NoJob = 10,
+    /// `JOB_ASSIGN`: server->worker, assigns a job (no unique id).
     JobAssign = 11,
+    /// `WORK_STATUS`: worker->server->client, reports progress on a
+    /// foreground job.
     WorkStatus = 12,
+    /// `WORK_COMPLETE`: worker->server->client, reports a job's successful
+    /// result.
     WorkComplete = 13,
+    /// `WORK_FAIL`: worker->server->client, reports that a job failed.
     WorkFail = 14,
+    /// `GET_STATUS`: client->server, requests a job's status by handle.
     GetStatus = 15,
+    /// `ECHO_REQ`: round-trip test request; the server replies with
+    /// `ECHO_RES` carrying the same payload.
     EchoReq = 16,
+    /// `ECHO_RES`: reply to `ECHO_REQ`.
     EchoRes = 17,
+    /// `SUBMIT_JOB_BG`: client->server, submits a normal-priority
+    /// background job.
     SubmitJobBg = 18,
+    /// `ERROR`: server->client/worker, reports an error condition.
     Error = 19,
+    /// `STATUS_RES`: server->client, reply to `GET_STATUS`.
     StatusRes = 20,
+    /// `SUBMIT_JOB_HIGH`: client->server, submits a high-priority
+    /// foreground job.
     SubmitJobHigh = 21,
+    /// `SET_CLIENT_ID`: worker->server, sets a human-readable client id
+    /// (visible in the admin `workers` command's output).
     SetClientId = 22,
+    /// `CAN_DO_TIMEOUT`: worker->server, like `CAN_DO` but with a timeout
+    /// after which the server fails the job back if it isn't completed.
     CanDoTimeout = 23,
+    /// `ALL_YOURS`: worker->server, part of an older multi-server worker
+    /// coordination scheme; not sent or interpreted by this crate.
     AllYours = 24,
+    /// `WORK_EXCEPTION`: worker->server->client, reports that a job raised
+    /// an exception. Only forwarded to clients that opted in with
+    /// `OPTION_REQ "exceptions"`.
     WorkException = 25,
+    /// `OPTION_REQ`: client/worker->server, requests a named server option
+    /// (this crate only ever requests `"exceptions"`).
     OptionReq = 26,
+    /// `OPTION_RES`: server->client/worker, acknowledges an `OPTION_REQ`.
     OptionRes = 27,
+    /// `WORK_DATA`: worker->server->client, a partial-result chunk for a
+    /// foreground job.
     WorkData = 28,
+    /// `WORK_WARNING`: worker->server->client, a warning message for a
+    /// foreground job.
     WorkWarning = 29,
+    /// `GRAB_JOB_UNIQ`: worker->server, requests a job whose assignment
+    /// includes the caller-supplied unique id.
     GrabJobUniq = 30,
+    /// `JOB_ASSIGN_UNIQ`: server->worker, assigns a job, including its
+    /// unique id.
     JobAssignUniq = 31,
+    /// `SUBMIT_JOB_HIGH_BG`: client->server, submits a high-priority
+    /// background job.
     SubmitJobHighBg = 32,
+    /// `SUBMIT_JOB_LOW`: client->server, submits a low-priority foreground
+    /// job.
     SubmitJobLow = 33,
+    /// `SUBMIT_JOB_LOW_BG`: client->server, submits a low-priority
+    /// background job.
     SubmitJobLowBg = 34,
-    /// Never emitted by this crate: unused by gearmand itself. Kept only so
-    /// decoding a peer's packet stream stays exhaustive.
+    /// `SUBMIT_JOB_SCHED`: a cron-like scheduled submission. Never emitted
+    /// by this crate: unused by gearmand itself. Kept only so decoding a
+    /// peer's packet stream stays exhaustive.
     SubmitJobSched = 35,
+    /// `SUBMIT_JOB_EPOCH`: client->server, submits a job that becomes
+    /// eligible to run at or after a given Unix-epoch time.
     SubmitJobEpoch = 36,
+    /// `SUBMIT_REDUCE_JOB`: client->server, submits a foreground job
+    /// tagged with a reducer name, forwarded to workers that grab with
+    /// `GRAB_JOB_ALL`.
     SubmitReduceJob = 37,
+    /// `SUBMIT_REDUCE_JOB_BACKGROUND`: background counterpart of
+    /// `SUBMIT_REDUCE_JOB`.
     SubmitReduceJobBackground = 38,
+    /// `GRAB_JOB_ALL`: worker->server, requests a job whose assignment
+    /// includes both the unique id and, if present, the reducer name.
     GrabJobAll = 39,
+    /// `JOB_ASSIGN_ALL`: server->worker, assigns a job, including its
+    /// unique id and reducer name.
     JobAssignAll = 40,
+    /// `GET_STATUS_UNIQUE`: client->server, requests a job's status by
+    /// unique id, additionally returning a client count.
     GetStatusUnique = 41,
+    /// `STATUS_RES_UNIQUE`: server->client, reply to `GET_STATUS_UNIQUE`.
     StatusResUnique = 42,
 }
 

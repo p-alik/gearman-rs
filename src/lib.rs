@@ -4,6 +4,8 @@
 //! the C `libgearman`). See the `PROTOCOL` file in the gearmand C sources
 //! for the canonical wire-format reference this crate was built against.
 
+#![warn(missing_docs)]
+
 pub mod error;
 pub mod protocol;
 

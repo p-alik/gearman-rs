@@ -11,17 +11,21 @@ use crate::protocol::PacketType;
 /// allocation before we've even validated the rest of the packet.
 pub const DEFAULT_MAX_PAYLOAD_SIZE: u32 = 64 * 1024 * 1024;
 
+/// A [`tokio_util::codec`] `Encoder`/`Decoder` for the Gearman binary
+/// protocol.
 pub struct GearmanCodec {
     max_payload_size: u32,
 }
 
 impl GearmanCodec {
+    /// Creates a codec with [`DEFAULT_MAX_PAYLOAD_SIZE`] as the payload cap.
     pub fn new() -> Self {
         Self {
             max_payload_size: DEFAULT_MAX_PAYLOAD_SIZE,
         }
     }
 
+    /// Creates a codec with a custom payload cap, in bytes.
     pub fn with_max_payload_size(max_payload_size: u32) -> Self {
         Self { max_payload_size }
     }

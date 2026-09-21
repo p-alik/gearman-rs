@@ -1,3 +1,7 @@
+//! The Gearman binary wire protocol: packet framing ([`GearmanCodec`]),
+//! packet types ([`PacketType`]), and the decoded packet representation
+//! ([`Packet`]).
+
 mod codec;
 mod command;
 mod header;
