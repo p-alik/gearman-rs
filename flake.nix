@@ -42,7 +42,8 @@
               echo "gearmand: $(command -v gearmand)"
             else
               echo "gearmand: not found -- build it from https://github.com/gearman/gearmand" \
-                   "(see its shell.nix for build deps), then set GEARMAND_BIN or add it to PATH." \
+                   "(see its shell.nix for build deps), then set GEARMAND_BIN or add it to PATH," \
+                   "or use scripts/gearmand-docker (requires Docker) as GEARMAND_BIN." \
                    "Integration tests and examples fall back to a plain 'gearmand' lookup on PATH."
             fi
           '';

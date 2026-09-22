@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Drop-in `gearmand` for machines without a native build (e.g. NixOS, where
+# nixpkgs has no `gearmand` package): runs the real C server from the
+# `artefactual/gearmand` image instead. Point the test/example harness at it
+# with:
+#
+#   GEARMAND_BIN=$PWD/scripts/gearmand-docker cargo test --all-features
+#
+# tests/common/mod.rs execs this as `gearmand -p <port> [extra args]`, so it
+# must behave like the real binary: block in the foreground and accept the
+# same flags, including tls_integration.rs's --ssl-certificate/--ssl-key
+# with CARGO_MANIFEST_DIR-absolute paths.
+set -euo pipefail
+
+# --network host: the harness picks an ephemeral port and expects it
+#   reachable at 127.0.0.1:<port>, same as a natively spawned process.
+# --user: matches the host UID so gearmand can read the 0600
+#   tests/tls_fixtures/key.pem bind-mounted in from the host.
+# --entrypoint gearmand: skips the image's own entrypoint script, which
+#   needs root to write /etc/gearmand.conf and would fail under --user.
+exec docker run --rm \
+  --network host \
+  --user "$(id -u):$(id -g)" \
+  --entrypoint gearmand \
+  -v "$PWD:$PWD" \
+  artefactual/gearmand "$@"

@@ -67,6 +67,16 @@ Integration tests spawn a real `gearmand` binary, found via the
 skipped with a notice rather than failing. The devShell reports which one it
 found (if any) when it starts.
 
+If you don't have `gearmand` built locally (nixpkgs doesn't package it),
+`scripts/gearmand-docker` runs the real C server from the
+[`artefactual/gearmand`](https://hub.docker.com/r/artefactual/gearmand)
+image and behaves like a native binary to the test harness. Requires
+Docker:
+
+```sh
+GEARMAND_BIN=$PWD/scripts/gearmand-docker cargo test --all-features
+```
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
