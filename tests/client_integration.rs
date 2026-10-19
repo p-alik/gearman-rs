@@ -143,7 +143,10 @@ async fn assert_uniques_coalesce(client: &gearman::client::Client) {
                 .expect("background submit should succeed");
             handles.push(submitted.handle);
         }
-        assert_eq!(handles[0].as_str(), handles[1].as_str(), "{unique}");
+        // Compare the whole JobHandle, which includes the issuing server:
+        // handle strings are only unique per server, so two servers on one
+        // host can issue the same string for two separate jobs.
+        assert_eq!(handles[0], handles[1], "{unique}");
     }
 }
 
