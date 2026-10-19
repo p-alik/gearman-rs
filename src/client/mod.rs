@@ -484,6 +484,21 @@ async fn negotiate_exceptions(conn: &mut Connection<BoxedStream>) -> Result<bool
     }
 }
 
+/// Event subscribers per job handle. A handle can have several: gearmand
+/// coalesces foreground submissions sharing a unique id into one job and
+/// answers each with the same handle, and every one of those callers must
+/// see the job's events.
+type JobEventSubscribers = HashMap<String, Vec<mpsc::UnboundedSender<JobEvent>>>;
+
+/// Drops subscribers whose `JobEventStream` is gone, and handles left with
+/// none.
+fn prune_closed_subscribers(job_events: &mut JobEventSubscribers) {
+    job_events.retain(|_, senders| {
+        senders.retain(|sender| !sender.is_closed());
+        !senders.is_empty()
+    });
+}
+
 /// How often to sweep `job_events` for entries whose `JobEventStream` was
 /// dropped without the job ever reaching a terminal state on this
 /// connection (e.g. the caller timed out waiting) — otherwise those entries
@@ -495,14 +510,14 @@ async fn actor_loop(
     cmd_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
 ) -> ActorOutcome {
     let mut pending_replies: VecDeque<PendingReply> = VecDeque::new();
-    let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> = HashMap::new();
+    let mut job_events = JobEventSubscribers::new();
     let mut prune_interval = tokio::time::interval(JOB_EVENTS_PRUNE_INTERVAL);
     prune_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let outcome = loop {
         tokio::select! {
             _ = prune_interval.tick() => {
-                job_events.retain(|_, sender| !sender.is_closed());
+                prune_closed_subscribers(&mut job_events);
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -561,14 +576,14 @@ fn fail_all_pending(pending_replies: VecDeque<PendingReply>) {
 fn handle_incoming(
     packet: Packet,
     pending_replies: &mut VecDeque<PendingReply>,
-    job_events: &mut HashMap<String, mpsc::UnboundedSender<JobEvent>>,
+    job_events: &mut JobEventSubscribers,
 ) {
     match packet.ptype {
         PacketType::JobCreated => match pending_replies.pop_front() {
             Some(PendingReply::JobCreated { reply, events }) => {
                 let handle = packet.arg_str(0).unwrap_or_default().to_string();
                 if let Some(sender) = events {
-                    job_events.insert(handle.clone(), sender);
+                    job_events.entry(handle.clone()).or_default().push(sender);
                 }
                 let _ = reply.send(Ok(handle));
             }
@@ -617,10 +632,7 @@ fn handle_incoming(
     }
 }
 
-fn dispatch_work_event(
-    packet: Packet,
-    job_events: &mut HashMap<String, mpsc::UnboundedSender<JobEvent>>,
-) {
+fn dispatch_work_event(packet: Packet, job_events: &mut JobEventSubscribers) {
     let Some(handle) = packet.arg_str(0).map(str::to_string) else {
         return;
     };
@@ -652,11 +664,14 @@ fn dispatch_work_event(
         _ => unreachable!("filtered by caller"),
     };
 
-    if let Some(sender) = job_events.get(&handle) {
-        let _ = sender.send(event);
-    }
     if terminal {
-        job_events.remove(&handle);
+        for sender in job_events.remove(&handle).unwrap_or_default() {
+            let _ = sender.send(event.clone());
+        }
+    } else if let Some(senders) = job_events.get(&handle) {
+        for sender in senders {
+            let _ = sender.send(event.clone());
+        }
     }
 }
 
@@ -694,18 +709,28 @@ mod tests {
     /// rather than living for the rest of the connection.
     #[test]
     fn closed_job_event_senders_get_pruned() {
-        let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> = HashMap::new();
+        let mut job_events = JobEventSubscribers::new();
 
         let (still_open_tx, _still_open_rx) = mpsc::unbounded_channel();
-        job_events.insert("H:open:1".to_string(), still_open_tx);
+        job_events.insert("H:open:1".to_string(), vec![still_open_tx]);
 
         let (dropped_tx, dropped_rx) = mpsc::unbounded_channel();
-        job_events.insert("H:dropped:1".to_string(), dropped_tx);
+        job_events.insert("H:dropped:1".to_string(), vec![dropped_tx]);
         drop(dropped_rx); // simulates an early-dropped JobEventStream
 
-        job_events.retain(|_, sender| !sender.is_closed());
+        // A coalesced job where only one of two subscribers went away.
+        let (shared_open_tx, _shared_open_rx) = mpsc::unbounded_channel();
+        let (shared_dropped_tx, shared_dropped_rx) = mpsc::unbounded_channel();
+        job_events.insert(
+            "H:shared:1".to_string(),
+            vec![shared_open_tx, shared_dropped_tx],
+        );
+        drop(shared_dropped_rx);
+
+        prune_closed_subscribers(&mut job_events);
 
         assert!(job_events.contains_key("H:open:1"));
         assert!(!job_events.contains_key("H:dropped:1"));
+        assert_eq!(job_events["H:shared:1"].len(), 1);
     }
 }

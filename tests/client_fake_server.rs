@@ -107,3 +107,100 @@ async fn connect_waits_for_option_req_reply_and_does_not_desync_replies() {
 
     server.await.expect("fake server task should not panic");
 }
+
+/// Answers two foreground `SUBMIT_JOB`s with the *same* handle, as gearmand
+/// does when it coalesces submissions sharing a unique id, then sends one
+/// `WORK_DATA` and one `WORK_COMPLETE` for that handle.
+async fn fake_server_coalescing(listener: TcpListener) {
+    let (stream, _) = listener.accept().await.expect("accept");
+    let mut conn = Connection::from_stream(stream);
+
+    for _ in 0..2 {
+        let submit = conn
+            .recv()
+            .await
+            .expect("recv should not error")
+            .expect("client should submit twice");
+        assert_eq!(submit.ptype, PacketType::SubmitJob);
+        assert_eq!(submit.arg_str(1), Some("same-unique"));
+        conn.send(Packet::response(
+            PacketType::JobCreated,
+            vec![Bytes::from_static(b"H:test:1")],
+        ))
+        .await
+        .expect("send should not error");
+    }
+
+    conn.send(Packet::response(
+        PacketType::WorkData,
+        vec![
+            Bytes::from_static(b"H:test:1"),
+            Bytes::from_static(b"chunk"),
+        ],
+    ))
+    .await
+    .expect("send should not error");
+    conn.send(Packet::response(
+        PacketType::WorkComplete,
+        vec![Bytes::from_static(b"H:test:1"), Bytes::from_static(b"done")],
+    ))
+    .await
+    .expect("send should not error");
+
+    // Keep the connection open until the client has read everything.
+    let _ = conn.recv().await;
+}
+
+/// Regression test: the client kept one event sender per handle, so when
+/// two overlapping foreground submissions got the same (coalesced) handle,
+/// the second replaced the first, and the first caller saw its stream end
+/// without a result. Both callers must now receive every event.
+#[tokio::test]
+async fn coalesced_foreground_submissions_all_receive_events() {
+    use futures::StreamExt;
+    use gearman::client::{JobEvent, SubmitOptions};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind a port");
+    let addr = listener.local_addr().unwrap().to_string();
+    tokio::spawn(fake_server_coalescing(listener));
+
+    let client = ClientBuilder::new()
+        .servers([addr])
+        .connect()
+        .await
+        .expect("client should connect");
+
+    let mut streams = Vec::new();
+    for _ in 0..2 {
+        let submitted = client
+            .submit(
+                "reverse",
+                Some("same-unique"),
+                Bytes::from_static(b"payload"),
+                SubmitOptions::foreground(),
+            )
+            .await
+            .expect("submit should succeed");
+        assert_eq!(submitted.handle.as_str(), "H:test:1");
+        streams.push(submitted.events.expect("foreground job has events"));
+    }
+
+    for mut events in streams {
+        let collected = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut collected = Vec::new();
+            while let Some(event) = events.next().await {
+                collected.push(event);
+            }
+            collected
+        })
+        .await
+        .expect("event stream must end after WORK_COMPLETE");
+        assert!(
+            matches!(
+                collected.as_slice(),
+                [JobEvent::Data(d), JobEvent::Complete(c)] if d == "chunk" && c == "done"
+            ),
+            "unexpected events: {collected:?}"
+        );
+    }
+}

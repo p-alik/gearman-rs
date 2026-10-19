@@ -16,6 +16,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   list agree on the server. Off by default (`ServerSelection::RoundRobin`);
   submissions without a unique id keep using round-robin.
 
+### Fixed
+
+- `Client`: when gearmand coalesced overlapping foreground submissions
+  sharing a unique id into one job (same handle), only the last submitter
+  received the job's events; earlier ones saw their event stream end
+  without a result. Every submitter now receives all events.
+
 ### Changed
 
 - **Breaking:** `AdminClient::show_unique_jobs()` now returns
