@@ -24,6 +24,7 @@ thiserror = "1"
 tracing = "0.1"
 futures = "0.3"
 async-trait = "0.1"
+md-5 = "0.10"
 tokio-rustls = { version = "0.26", optional = true }
 
 [dev-dependencies]

@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use crate::client::ketama::Ring;
 use crate::client::ClientCommand;
 
 pub(crate) struct ServerSlot {
@@ -10,20 +11,23 @@ pub(crate) struct ServerSlot {
     pub(crate) connected: Arc<AtomicBool>,
 }
 
-/// The set of job servers a `Client` round-robins submissions across. Each
-/// server has its own persistent, full-duplex connection (see
-/// `run_server_actor`), so this pool is just routing, not pooling multiple
-/// connections per server.
+/// The set of job servers a `Client` routes submissions across: round-robin
+/// by default, or by unique id when a ketama `Ring` is configured (see
+/// [`crate::client::ServerSelection`]). Each server has its own persistent,
+/// full-duplex connection (see `run_server_actor`), so this pool is just
+/// routing, not pooling multiple connections per server.
 pub(crate) struct ServerPool {
     servers: Vec<ServerSlot>,
     cursor: AtomicUsize,
+    ring: Option<Ring>,
 }
 
 impl ServerPool {
-    pub(crate) fn new(servers: Vec<ServerSlot>) -> Self {
+    pub(crate) fn new(servers: Vec<ServerSlot>, ring: Option<Ring>) -> Self {
         Self {
             servers,
             cursor: AtomicUsize::new(0),
+            ring,
         }
     }
 
@@ -32,13 +36,27 @@ impl ServerPool {
     }
 
     pub(crate) fn any_healthy(&self) -> bool {
-        self.servers
-            .iter()
-            .any(|s| s.connected.load(Ordering::Relaxed))
+        (0..self.servers.len()).any(|idx| self.is_healthy(idx))
+    }
+
+    /// Picks the server for a job submission: by `unique` on the ketama ring
+    /// when one is configured and `unique` is non-empty, otherwise
+    /// round-robin.
+    pub(crate) fn select_for_submit(&self, unique: Option<&str>) -> Option<usize> {
+        match (&self.ring, unique) {
+            (Some(ring), Some(unique)) if !unique.is_empty() => {
+                ring.select(unique.as_bytes(), |idx| self.is_healthy(idx))
+            }
+            _ => self.next_healthy(),
+        }
+    }
+
+    fn is_healthy(&self, index: usize) -> bool {
+        self.servers[index].connected.load(Ordering::Relaxed)
     }
 
     /// Round-robin pick the next healthy server, skipping down ones.
-    pub(crate) fn next_healthy(&self) -> Option<usize> {
+    fn next_healthy(&self) -> Option<usize> {
         let len = self.servers.len();
         if len == 0 {
             return None;
@@ -46,6 +64,6 @@ impl ServerPool {
         let start = self.cursor.fetch_add(1, Ordering::Relaxed) % len;
         (0..len)
             .map(|offset| (start + offset) % len)
-            .find(|&idx| self.servers[idx].connected.load(Ordering::Relaxed))
+            .find(|&idx| self.is_healthy(idx))
     }
 }

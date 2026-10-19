@@ -2,6 +2,7 @@
 //! tracking their progress. See [`Client`] and [`ClientBuilder`].
 
 mod job;
+mod ketama;
 mod multi;
 
 pub use job::{
@@ -22,13 +23,33 @@ use crate::net::{BoxedStream, Transport};
 use crate::protocol::{Packet, PacketType};
 use crate::Connection;
 
+use ketama::Ring;
 use multi::{ServerPool, ServerSlot};
+
+/// How a [`Client`] with several servers picks one for each job submission.
+/// Status queries always go to the server that created the job.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServerSelection {
+    /// Rotate through the healthy servers (the default).
+    #[default]
+    RoundRobin,
+    /// Hash the job's unique id onto a ketama consistent-hash ring built
+    /// from the server list, so submissions sharing a unique id land on the
+    /// same server and gearmand can coalesce them. Matches libgearman's
+    /// `gearman_client_set_server_selection_by_unique()` (gearmand 2.2.0+):
+    /// a C client with the same server list, written the same way (the host
+    /// as given, not its resolved address), picks the same server. If that
+    /// server is down, the next one in ring order is used. Submissions
+    /// without a unique id, or with an empty one, fall back to round-robin.
+    ByUnique,
+}
 
 /// Builds a [`Client`], configuring which servers it connects to and how.
 pub struct ClientBuilder {
     servers: Vec<String>,
     with_exceptions: bool,
     transport: Transport,
+    selection: ServerSelection,
 }
 
 impl ClientBuilder {
@@ -39,6 +60,7 @@ impl ClientBuilder {
             servers: Vec::new(),
             with_exceptions: false,
             transport: Transport::default(),
+            selection: ServerSelection::default(),
         }
     }
 
@@ -57,6 +79,13 @@ impl ClientBuilder {
     /// `WORK_EXCEPTION` events for foreground jobs.
     pub fn with_exceptions(mut self, enabled: bool) -> Self {
         self.with_exceptions = enabled;
+        self
+    }
+
+    /// Sets how a server is picked for each job submission; see
+    /// [`ServerSelection`].
+    pub fn server_selection(mut self, selection: ServerSelection) -> Self {
+        self.selection = selection;
         self
     }
 
@@ -88,7 +117,11 @@ impl ClientBuilder {
             ));
             slots.push(ServerSlot { cmd_tx, connected });
         }
-        let pool = Arc::new(ServerPool::new(slots));
+        let ring = match self.selection {
+            ServerSelection::RoundRobin => None,
+            ServerSelection::ByUnique => Some(Ring::new(&self.servers)),
+        };
+        let pool = Arc::new(ServerPool::new(slots, ring));
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while !pool.any_healthy() {
@@ -202,7 +235,7 @@ impl Client {
     ) -> Result<SubmittedJob> {
         let server_index = self
             .pool
-            .next_healthy()
+            .select_for_submit(unique)
             .ok_or(GearmanError::NoServersAvailable)?;
         let slot = self.pool.get(server_index);
 

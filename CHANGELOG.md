@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `ClientBuilder::server_selection(ServerSelection::ByUnique)`: route each
+  job submission to a server chosen by hashing its unique id onto a ketama
+  consistent-hash ring, so submissions sharing a unique id land on the same
+  server and gearmand can coalesce them. A port of libgearman 2.2.0's
+  `gearman_client_set_server_selection_by_unique()`, including its ring
+  layout and fail-over order, so Rust and C clients with the same server
+  list agree on the server. Off by default (`ServerSelection::RoundRobin`);
+  submissions without a unique id keep using round-robin.
+
 ### Changed
 
 - **Breaking:** `AdminClient::show_unique_jobs()` now returns
