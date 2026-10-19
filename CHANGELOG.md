@@ -5,6 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `AdminClient::show_unique_jobs()` now returns
+  `Vec<UniqueJobEntry>` instead of `Vec<String>`. gearmand 2.2.0 changed
+  each `show unique jobs` line to `<job handle>\t<unique>`, so the raw
+  lines no longer were bare unique ids. `UniqueJobEntry::handle` is the
+  handle `cancel_job` expects, or `None` against a gearmand older than
+  2.2.0, which reports only the unique id.
+
 ## [0.1.2] - 2026-09-21
 
 ### Added
