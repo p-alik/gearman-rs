@@ -507,19 +507,52 @@ async fn negotiate_exceptions(conn: &mut Connection<BoxedStream>) -> Result<bool
     }
 }
 
-/// Event subscribers per job handle. A handle can have several: gearmand
-/// coalesces foreground submissions sharing a unique id into one job and
-/// answers each with the same handle, and every one of those callers must
-/// see the job's events.
-type JobEventSubscribers = HashMap<String, Vec<mpsc::UnboundedSender<JobEvent>>>;
+/// Event subscribers per job handle on one connection.
+type JobEventSubscribers = HashMap<String, HandleSubscribers>;
 
-/// Drops subscribers whose `JobEventStream` is gone, and handles left with
-/// none.
+/// The foreground submissions sharing one job handle. gearmand coalesces
+/// submissions with the same unique id into one job and answers each with
+/// the same handle, but registers each as its own client of the job: every
+/// `WORK_*` packet is sent once per registration, those copies queued back
+/// to back (`_server_queue_work_data` in gearmand's `server.cc`). So each
+/// copy goes to the next subscriber in turn, and every subscriber sees each
+/// event exactly once. Subscribers are added on `JOB_CREATED`, which never
+/// lands between the copies of one event, so `cursor` is back at 0 then.
+#[derive(Default)]
+struct HandleSubscribers {
+    senders: Vec<mpsc::UnboundedSender<JobEvent>>,
+    cursor: usize,
+}
+
+impl HandleSubscribers {
+    /// Delivers one wire copy of an event. Returns whether subscribers
+    /// remain; a terminal event retires the subscriber it went to.
+    fn deliver(&mut self, event: JobEvent, terminal: bool) -> bool {
+        if self.senders.is_empty() {
+            return false;
+        }
+        if self.cursor >= self.senders.len() {
+            self.cursor = 0;
+        }
+        if terminal {
+            let _ = self.senders.remove(self.cursor).send(event);
+        } else {
+            let _ = self.senders[self.cursor].send(event);
+            self.cursor += 1;
+        }
+        if self.cursor >= self.senders.len() {
+            self.cursor = 0;
+        }
+        !self.senders.is_empty()
+    }
+}
+
+/// Drops handles whose subscribers' `JobEventStream`s are *all* gone. A
+/// handle with some subscribers left keeps its closed ones too: gearmand
+/// still sends their copies, and removing them would hand those copies to
+/// the wrong subscriber. They go away with the job's terminal events.
 fn prune_closed_subscribers(job_events: &mut JobEventSubscribers) {
-    job_events.retain(|_, senders| {
-        senders.retain(|sender| !sender.is_closed());
-        !senders.is_empty()
-    });
+    job_events.retain(|_, subs| !subs.senders.iter().all(|sender| sender.is_closed()));
 }
 
 /// How often to sweep `job_events` for entries whose `JobEventStream` was
@@ -606,7 +639,11 @@ fn handle_incoming(
             Some(PendingReply::JobCreated { reply, events }) => {
                 let handle = packet.arg_str(0).unwrap_or_default().to_string();
                 if let Some(sender) = events {
-                    job_events.entry(handle.clone()).or_default().push(sender);
+                    job_events
+                        .entry(handle.clone())
+                        .or_default()
+                        .senders
+                        .push(sender);
                 }
                 let _ = reply.send(Ok(handle));
             }
@@ -687,13 +724,9 @@ fn dispatch_work_event(packet: Packet, job_events: &mut JobEventSubscribers) {
         _ => unreachable!("filtered by caller"),
     };
 
-    if terminal {
-        for sender in job_events.remove(&handle).unwrap_or_default() {
-            let _ = sender.send(event.clone());
-        }
-    } else if let Some(senders) = job_events.get(&handle) {
-        for sender in senders {
-            let _ = sender.send(event.clone());
+    if let Some(subs) = job_events.get_mut(&handle) {
+        if !subs.deliver(event, terminal) {
+            job_events.remove(&handle);
         }
     }
 }
@@ -734,19 +767,22 @@ mod tests {
     fn closed_job_event_senders_get_pruned() {
         let mut job_events = JobEventSubscribers::new();
 
+        let subscribers = |senders| HandleSubscribers { senders, cursor: 0 };
+
         let (still_open_tx, _still_open_rx) = mpsc::unbounded_channel();
-        job_events.insert("H:open:1".to_string(), vec![still_open_tx]);
+        job_events.insert("H:open:1".to_string(), subscribers(vec![still_open_tx]));
 
         let (dropped_tx, dropped_rx) = mpsc::unbounded_channel();
-        job_events.insert("H:dropped:1".to_string(), vec![dropped_tx]);
+        job_events.insert("H:dropped:1".to_string(), subscribers(vec![dropped_tx]));
         drop(dropped_rx); // simulates an early-dropped JobEventStream
 
-        // A coalesced job where only one of two subscribers went away.
+        // A coalesced job where only one of two subscribers went away: both
+        // stay, since gearmand still sends a copy for each.
         let (shared_open_tx, _shared_open_rx) = mpsc::unbounded_channel();
         let (shared_dropped_tx, shared_dropped_rx) = mpsc::unbounded_channel();
         job_events.insert(
             "H:shared:1".to_string(),
-            vec![shared_open_tx, shared_dropped_tx],
+            subscribers(vec![shared_open_tx, shared_dropped_tx]),
         );
         drop(shared_dropped_rx);
 
@@ -754,6 +790,88 @@ mod tests {
 
         assert!(job_events.contains_key("H:open:1"));
         assert!(!job_events.contains_key("H:dropped:1"));
-        assert_eq!(job_events["H:shared:1"].len(), 1);
+        assert_eq!(job_events["H:shared:1"].senders.len(), 2);
+    }
+
+    fn work_packet(ptype: PacketType, data: &'static [u8]) -> Packet {
+        Packet::response(
+            ptype,
+            vec![Bytes::from_static(b"H:t:1"), Bytes::from_static(data)],
+        )
+    }
+
+    /// gearmand sends each event once per coalesced submission, back to
+    /// back; each subscriber must get exactly one copy of each event.
+    #[test]
+    fn coalesced_job_copies_go_one_per_subscriber() {
+        let mut job_events = JobEventSubscribers::new();
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        job_events.insert(
+            "H:t:1".to_string(),
+            HandleSubscribers {
+                senders: vec![tx_a, tx_b],
+                cursor: 0,
+            },
+        );
+
+        for (ptype, data) in [
+            (PacketType::WorkData, &b"one"[..]),
+            (PacketType::WorkData, b"two"),
+            (PacketType::WorkComplete, b"done"),
+        ] {
+            for _ in 0..2 {
+                dispatch_work_event(work_packet(ptype, data), &mut job_events);
+            }
+        }
+
+        assert!(
+            job_events.is_empty(),
+            "terminal copies retire every subscriber"
+        );
+        for rx in [&mut rx_a, &mut rx_b] {
+            let mut events = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+            assert!(
+                matches!(
+                    events.as_slice(),
+                    [JobEvent::Data(a), JobEvent::Data(b), JobEvent::Complete(c)]
+                        if a == "one" && b == "two" && c == "done"
+                ),
+                "unexpected events: {events:?}"
+            );
+        }
+    }
+
+    /// A submission joining a running job is only sent copies of later
+    /// events; the earlier subscriber keeps getting one copy of each.
+    #[test]
+    fn subscriber_joining_mid_job_gets_only_later_events() {
+        let mut job_events = JobEventSubscribers::new();
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        job_events
+            .entry("H:t:1".to_string())
+            .or_default()
+            .senders
+            .push(tx_a);
+
+        dispatch_work_event(work_packet(PacketType::WorkData, b"early"), &mut job_events);
+        job_events.get_mut("H:t:1").unwrap().senders.push(tx_b);
+        for _ in 0..2 {
+            dispatch_work_event(work_packet(PacketType::WorkData, b"late"), &mut job_events);
+        }
+
+        let drain = |rx: &mut mpsc::UnboundedReceiver<JobEvent>| {
+            let mut data = Vec::new();
+            while let Ok(JobEvent::Data(d)) = rx.try_recv() {
+                data.push(d);
+            }
+            data
+        };
+        assert_eq!(drain(&mut rx_a), vec!["early", "late"]);
+        assert_eq!(drain(&mut rx_b), vec!["late"]);
     }
 }

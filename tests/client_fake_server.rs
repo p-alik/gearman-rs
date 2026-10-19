@@ -109,8 +109,9 @@ async fn connect_waits_for_option_req_reply_and_does_not_desync_replies() {
 }
 
 /// Answers two foreground `SUBMIT_JOB`s with the *same* handle, as gearmand
-/// does when it coalesces submissions sharing a unique id, then sends one
-/// `WORK_DATA` and one `WORK_COMPLETE` for that handle.
+/// does when it coalesces submissions sharing a unique id, then sends that
+/// handle's `WORK_DATA` and `WORK_COMPLETE` the way gearmand does: once per
+/// registered submission, so twice each.
 async fn fake_server_coalescing(listener: TcpListener) {
     let (stream, _) = listener.accept().await.expect("accept");
     let mut conn = Connection::from_stream(stream);
@@ -131,21 +132,22 @@ async fn fake_server_coalescing(listener: TcpListener) {
         .expect("send should not error");
     }
 
-    conn.send(Packet::response(
-        PacketType::WorkData,
-        vec![
-            Bytes::from_static(b"H:test:1"),
-            Bytes::from_static(b"chunk"),
-        ],
-    ))
-    .await
-    .expect("send should not error");
-    conn.send(Packet::response(
-        PacketType::WorkComplete,
-        vec![Bytes::from_static(b"H:test:1"), Bytes::from_static(b"done")],
-    ))
-    .await
-    .expect("send should not error");
+    for (ptype, data) in [
+        (PacketType::WorkData, &b"chunk"[..]),
+        (PacketType::WorkComplete, b"done"),
+    ] {
+        for _ in 0..2 {
+            conn.send(Packet::response(
+                ptype,
+                vec![
+                    Bytes::from_static(b"H:test:1"),
+                    Bytes::copy_from_slice(data),
+                ],
+            ))
+            .await
+            .expect("send should not error");
+        }
+    }
 
     // Keep the connection open until the client has read everything.
     let _ = conn.recv().await;
@@ -154,7 +156,8 @@ async fn fake_server_coalescing(listener: TcpListener) {
 /// Regression test: the client kept one event sender per handle, so when
 /// two overlapping foreground submissions got the same (coalesced) handle,
 /// the second replaced the first, and the first caller saw its stream end
-/// without a result. Both callers must now receive every event.
+/// without a result (while the second got every chunk twice). Each caller
+/// must now receive every event exactly once.
 #[tokio::test]
 async fn coalesced_foreground_submissions_all_receive_events() {
     use futures::StreamExt;

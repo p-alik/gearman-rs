@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use gearman::client::{ClientBuilder, JobEvent};
+use gearman::client::{ClientBuilder, JobEvent, SubmitOptions};
 use gearman::worker::{GrabMode, WorkError, WorkerBuilder, WorkerJob};
 use gearman::GearmanError;
 
@@ -234,6 +234,83 @@ async fn reduce_job_forwards_reducer_name_to_worker() {
         }
     };
     assert_eq!(result.as_ref(), b"my-reducer");
+
+    worker.shutdown().await;
+}
+
+/// Streams one `WORK_DATA` chunk after a pause long enough for a second
+/// submission with the same unique id to join the job.
+async fn slow_streamer(job: WorkerJob) -> Result<Bytes, WorkError> {
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    job.reporter
+        .send_data(Bytes::from_static(b"chunk"))
+        .await
+        .map_err(|_| WorkError::Fail)?;
+    Ok(Bytes::from_static(b"done"))
+}
+
+/// Regression test against real gearmand: two overlapping foreground
+/// submissions with the same unique id on one connection are coalesced
+/// into one job, and gearmand sends every WORK_* packet once per
+/// submission. Each caller must see each event exactly once - not the
+/// chunk twice, and not a stream that ends without a result.
+#[tokio::test]
+async fn coalesced_foreground_jobs_stream_each_event_once_per_caller() {
+    let Some(gearmand) = common::GearmandProcess::start() else {
+        return;
+    };
+
+    let worker = WorkerBuilder::new()
+        .servers([gearmand.addr.clone()])
+        .concurrency(1)
+        .register("slow_streamer", slow_streamer)
+        .run();
+    settle().await;
+
+    let client = ClientBuilder::new()
+        .servers([gearmand.addr.clone()])
+        .connect()
+        .await
+        .expect("client should connect");
+
+    let mut streams = Vec::new();
+    let mut handles = Vec::new();
+    for _ in 0..2 {
+        let submitted = client
+            .submit(
+                "slow_streamer",
+                Some("coalesce-me"),
+                Bytes::from_static(b"payload"),
+                SubmitOptions::foreground(),
+            )
+            .await
+            .expect("submit should succeed");
+        handles.push(submitted.handle);
+        streams.push(submitted.events.expect("foreground job has events"));
+    }
+    assert_eq!(
+        handles[0], handles[1],
+        "same unique must coalesce into one job"
+    );
+
+    for mut events in streams {
+        let collected = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut collected = Vec::new();
+            while let Some(event) = events.next().await {
+                collected.push(event);
+            }
+            collected
+        })
+        .await
+        .expect("event stream must end after WORK_COMPLETE");
+        assert!(
+            matches!(
+                collected.as_slice(),
+                [JobEvent::Data(d), JobEvent::Complete(c)] if d == "chunk" && c == "done"
+            ),
+            "unexpected events: {collected:?}"
+        );
+    }
 
     worker.shutdown().await;
 }

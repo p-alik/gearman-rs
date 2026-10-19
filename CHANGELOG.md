@@ -23,8 +23,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `Client`: when gearmand coalesced overlapping foreground submissions
   sharing a unique id into one job (same handle), only the last submitter
-  received the job's events; earlier ones saw their event stream end
-  without a result. Every submitter now receives all events.
+  received the job's events, and got each one twice (gearmand sends every
+  `WORK_*` packet once per submission); earlier submitters saw their event
+  stream end without a result. Each submitter now receives every event
+  exactly once.
 
 ### Changed
 
