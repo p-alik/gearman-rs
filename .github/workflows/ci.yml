@@ -63,6 +63,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Cargo.lock isn't committed, so dependencies float to their newest
+      # release, which may need a newer Rust than our MSRV (tokio-util
+      # 0.7.20 needs 1.85). Cargo 1.75 can't pick versions by MSRV, so
+      # resolve the lockfile with stable cargo's MSRV-aware resolver,
+      # which honours `rust-version` from Cargo.toml, then check with 1.75.
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo generate-lockfile
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
       - uses: dtolnay/rust-toolchain@1.75
       # Excludes `tls`: rustls's aws-lc-rs backend pulls in zeroize, whose
       # latest release needs edition2024 (Rust 1.85+) regardless of the
