@@ -13,6 +13,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   lines no longer were bare unique ids. `UniqueJobEntry::handle` is the
   handle `cancel_job` expects, or `None` against a gearmand older than
   2.2.0, which reports only the unique id.
+- CI builds and tests against gearmand 2.2.0 (was 2.1.0).
+- `scripts/gearmand-docker` pins the `artefactual/gearmand` image tag
+  (2.1.0 until a 2.2.0 image is published) and accepts a
+  `GEARMAND_IMAGE` override.
 
 ## [0.1.2] - 2026-09-21
 

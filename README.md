@@ -77,6 +77,9 @@ Docker:
 GEARMAND_BIN=$PWD/scripts/gearmand-docker cargo test --all-features
 ```
 
+The image tag is pinned in the script; set `GEARMAND_IMAGE` (e.g.
+`GEARMAND_IMAGE=artefactual/gearmand:latest`) to test against another one.
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or

@@ -12,6 +12,11 @@
 # with CARGO_MANIFEST_DIR-absolute paths.
 set -euo pipefail
 
+# Pinned so local runs test a known server version. CI builds gearmand
+# 2.2.0 from source; artefactual/gearmand has no 2.2.0 tag yet, so bump
+# this once it does. Override with GEARMAND_IMAGE to try another one.
+image="${GEARMAND_IMAGE:-artefactual/gearmand:2.1.0}"
+
 # --network host: the harness picks an ephemeral port and expects it
 #   reachable at 127.0.0.1:<port>, same as a natively spawned process.
 # --user: matches the host UID so gearmand can read the 0600
@@ -23,4 +28,4 @@ exec docker run --rm \
   --user "$(id -u):$(id -g)" \
   --entrypoint gearmand \
   -v "$PWD:$PWD" \
-  artefactual/gearmand "$@"
+  "$image" "$@"
