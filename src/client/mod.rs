@@ -518,47 +518,66 @@ type JobEventSubscribers = HashMap<String, HandleSubscribers>;
 /// copy goes to the next subscriber in turn, and every subscriber sees each
 /// event exactly once. Subscribers are added on `JOB_CREATED`, which never
 /// lands between the copies of one event, so `cursor` is back at 0 then.
+///
+/// `slots` mirrors gearmand's registrations, one per `JOB_CREATED`, and a
+/// slot lives exactly as long as gearmand keeps the registration: until
+/// its terminal event, or until the connection closes. A slot whose
+/// `JobEventStream` was dropped is kept as `None` rather than removed, or
+/// the copies sent for it would land on the wrong subscriber.
 #[derive(Default)]
 struct HandleSubscribers {
-    senders: Vec<mpsc::UnboundedSender<JobEvent>>,
+    slots: Vec<Option<mpsc::UnboundedSender<JobEvent>>>,
     cursor: usize,
 }
 
 impl HandleSubscribers {
-    /// Delivers one wire copy of an event. Returns whether subscribers
-    /// remain; a terminal event retires the subscriber it went to.
+    fn add(&mut self, sender: mpsc::UnboundedSender<JobEvent>) {
+        self.slots.push(Some(sender));
+    }
+
+    /// Delivers one wire copy of an event. Returns whether slots remain;
+    /// a terminal event retires the slot it went to.
     fn deliver(&mut self, event: JobEvent, terminal: bool) -> bool {
-        if self.senders.is_empty() {
+        if self.slots.is_empty() {
             return false;
         }
-        if self.cursor >= self.senders.len() {
+        if self.cursor >= self.slots.len() {
             self.cursor = 0;
         }
-        if terminal {
-            let _ = self.senders.remove(self.cursor).send(event);
+        let slot = if terminal {
+            self.slots.remove(self.cursor)
         } else {
-            let _ = self.senders[self.cursor].send(event);
             self.cursor += 1;
+            self.slots[self.cursor - 1].clone()
+        };
+        if let Some(sender) = slot {
+            let _ = sender.send(event);
         }
-        if self.cursor >= self.senders.len() {
+        if self.cursor >= self.slots.len() {
             self.cursor = 0;
         }
-        !self.senders.is_empty()
+        !self.slots.is_empty()
     }
 }
 
-/// Drops handles whose subscribers' `JobEventStream`s are *all* gone. A
-/// handle with some subscribers left keeps its closed ones too: gearmand
-/// still sends their copies, and removing them would hand those copies to
-/// the wrong subscriber. They go away with the job's terminal events.
+/// Releases the channels of subscribers whose `JobEventStream` is gone,
+/// keeping their slots: gearmand keeps sending copies for those
+/// registrations until the job ends, whether or not anyone still listens,
+/// and a later submission joining the job must not be handed them.
 fn prune_closed_subscribers(job_events: &mut JobEventSubscribers) {
-    job_events.retain(|_, subs| !subs.senders.iter().all(|sender| sender.is_closed()));
+    for subs in job_events.values_mut() {
+        for slot in &mut subs.slots {
+            if slot.as_ref().is_some_and(|sender| sender.is_closed()) {
+                *slot = None;
+            }
+        }
+    }
 }
 
-/// How often to sweep `job_events` for entries whose `JobEventStream` was
-/// dropped without the job ever reaching a terminal state on this
-/// connection (e.g. the caller timed out waiting) — otherwise those entries
-/// and their senders live for the life of the connection.
+/// How often to release the channels of `JobEventStream`s that were
+/// dropped before their job reached a terminal state on this connection
+/// (e.g. the caller timed out waiting). Their slots stay until the job
+/// ends, as gearmand's registrations do.
 const JOB_EVENTS_PRUNE_INTERVAL: Duration = Duration::from_secs(30);
 
 async fn actor_loop(
@@ -639,11 +658,7 @@ fn handle_incoming(
             Some(PendingReply::JobCreated { reply, events }) => {
                 let handle = packet.arg_str(0).unwrap_or_default().to_string();
                 if let Some(sender) = events {
-                    job_events
-                        .entry(handle.clone())
-                        .or_default()
-                        .senders
-                        .push(sender);
+                    job_events.entry(handle.clone()).or_default().add(sender);
                 }
                 let _ = reply.send(Ok(handle));
             }
@@ -755,42 +770,73 @@ fn parse_status_res_unique(packet: &Packet) -> JobStatus {
 mod tests {
     use super::*;
 
-    /// Unit-tests the exact `retain` call `actor_loop`'s periodic sweep
-    /// runs (see `JOB_EVENTS_PRUNE_INTERVAL`), in isolation from the timer
-    /// that drives it — waiting out the real 30s interval in an integration
-    /// test would be both slow and not actually exercise different logic
-    /// than this. A caller dropping its `JobEventStream` early (e.g. via a
-    /// timeout) before the job reaches a terminal state closes the
-    /// channel's receiver; the sender must be pruned on the next sweep
-    /// rather than living for the rest of the connection.
+    /// Unit-tests the sweep `actor_loop` runs every
+    /// `JOB_EVENTS_PRUNE_INTERVAL`, in isolation from the timer that drives
+    /// it — waiting out the real 30s interval in an integration test would
+    /// be both slow and not actually exercise different logic than this. A
+    /// caller dropping its `JobEventStream` early (e.g. via a timeout)
+    /// closes the channel's receiver; the sweep releases the sender but
+    /// keeps the slot, since gearmand keeps that registration.
     #[test]
-    fn closed_job_event_senders_get_pruned() {
+    fn closed_job_event_senders_get_released_but_keep_their_slot() {
         let mut job_events = JobEventSubscribers::new();
 
-        let subscribers = |senders| HandleSubscribers { senders, cursor: 0 };
-
         let (still_open_tx, _still_open_rx) = mpsc::unbounded_channel();
-        job_events.insert("H:open:1".to_string(), subscribers(vec![still_open_tx]));
+        job_events
+            .entry("H:open:1".to_string())
+            .or_default()
+            .add(still_open_tx);
 
         let (dropped_tx, dropped_rx) = mpsc::unbounded_channel();
-        job_events.insert("H:dropped:1".to_string(), subscribers(vec![dropped_tx]));
+        job_events
+            .entry("H:dropped:1".to_string())
+            .or_default()
+            .add(dropped_tx);
         drop(dropped_rx); // simulates an early-dropped JobEventStream
-
-        // A coalesced job where only one of two subscribers went away: both
-        // stay, since gearmand still sends a copy for each.
-        let (shared_open_tx, _shared_open_rx) = mpsc::unbounded_channel();
-        let (shared_dropped_tx, shared_dropped_rx) = mpsc::unbounded_channel();
-        job_events.insert(
-            "H:shared:1".to_string(),
-            subscribers(vec![shared_open_tx, shared_dropped_tx]),
-        );
-        drop(shared_dropped_rx);
 
         prune_closed_subscribers(&mut job_events);
 
-        assert!(job_events.contains_key("H:open:1"));
-        assert!(!job_events.contains_key("H:dropped:1"));
-        assert_eq!(job_events["H:shared:1"].senders.len(), 2);
+        assert!(job_events["H:open:1"].slots[0].is_some());
+        assert_eq!(job_events["H:dropped:1"].slots.len(), 1);
+        assert!(job_events["H:dropped:1"].slots[0].is_none());
+    }
+
+    /// Regression test: the sweep used to remove a handle once all its
+    /// streams were closed. A later submission joining the still-running
+    /// job then got a fresh entry with one slot, while gearmand kept
+    /// sending a copy for the dropped registration too - so the new caller
+    /// received every event twice.
+    #[test]
+    fn rejoining_after_all_streams_dropped_gets_each_event_once() {
+        let mut job_events = JobEventSubscribers::new();
+        let (tx_a, rx_a) = mpsc::unbounded_channel();
+        job_events.entry("H:t:1".to_string()).or_default().add(tx_a);
+        drop(rx_a);
+        prune_closed_subscribers(&mut job_events);
+
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        job_events.entry("H:t:1".to_string()).or_default().add(tx_b);
+        for (ptype, data) in [
+            (PacketType::WorkData, &b"chunk"[..]),
+            (PacketType::WorkComplete, b"done"),
+        ] {
+            for _ in 0..2 {
+                dispatch_work_event(work_packet(ptype, data), &mut job_events);
+            }
+        }
+
+        let mut events = Vec::new();
+        while let Ok(event) = rx_b.try_recv() {
+            events.push(event);
+        }
+        assert!(
+            matches!(
+                events.as_slice(),
+                [JobEvent::Data(d), JobEvent::Complete(c)] if d == "chunk" && c == "done"
+            ),
+            "unexpected events: {events:?}"
+        );
+        assert!(job_events.is_empty(), "terminal copies retire both slots");
     }
 
     fn work_packet(ptype: PacketType, data: &'static [u8]) -> Packet {
@@ -807,13 +853,9 @@ mod tests {
         let mut job_events = JobEventSubscribers::new();
         let (tx_a, mut rx_a) = mpsc::unbounded_channel();
         let (tx_b, mut rx_b) = mpsc::unbounded_channel();
-        job_events.insert(
-            "H:t:1".to_string(),
-            HandleSubscribers {
-                senders: vec![tx_a, tx_b],
-                cursor: 0,
-            },
-        );
+        let subs = job_events.entry("H:t:1".to_string()).or_default();
+        subs.add(tx_a);
+        subs.add(tx_b);
 
         for (ptype, data) in [
             (PacketType::WorkData, &b"one"[..]),
@@ -852,14 +894,10 @@ mod tests {
         let mut job_events = JobEventSubscribers::new();
         let (tx_a, mut rx_a) = mpsc::unbounded_channel();
         let (tx_b, mut rx_b) = mpsc::unbounded_channel();
-        job_events
-            .entry("H:t:1".to_string())
-            .or_default()
-            .senders
-            .push(tx_a);
+        job_events.entry("H:t:1".to_string()).or_default().add(tx_a);
 
         dispatch_work_event(work_packet(PacketType::WorkData, b"early"), &mut job_events);
-        job_events.get_mut("H:t:1").unwrap().senders.push(tx_b);
+        job_events.get_mut("H:t:1").unwrap().add(tx_b);
         for _ in 0..2 {
             dispatch_work_event(work_packet(PacketType::WorkData, b"late"), &mut job_events);
         }
