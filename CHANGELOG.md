@@ -14,7 +14,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `gearman_client_set_server_selection_by_unique()`, including its ring
   layout and fail-over order, so Rust and C clients with the same server
   list agree on the server. Off by default (`ServerSelection::RoundRobin`);
-  submissions without a unique id keep using round-robin.
+  submissions without a unique id keep using round-robin. With it enabled,
+  `connect()` waits (within its 5s limit) until every server has finished
+  its first connection attempt, so no submission is routed away from a
+  server that is merely still connecting.
 
 ### Fixed
 

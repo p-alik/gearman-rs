@@ -165,9 +165,6 @@ async fn server_selection_by_unique_coalesces_across_servers() {
         .connect()
         .await
         .expect("client should connect");
-    // connect() returns once any server is up; give the rest a moment so
-    // routing isn't skewed by servers still connecting.
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     assert_uniques_coalesce(&client).await;
 }
@@ -187,7 +184,6 @@ async fn server_selection_by_unique_fails_over_when_a_server_is_down() {
         .connect()
         .await
         .expect("client should connect");
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
     // Stop one server: uniques it owned must fail over consistently to
     // the next one on the ring instead of failing.

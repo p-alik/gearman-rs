@@ -9,6 +9,9 @@ use crate::client::ClientCommand;
 pub(crate) struct ServerSlot {
     pub(crate) cmd_tx: mpsc::UnboundedSender<ClientCommand>,
     pub(crate) connected: Arc<AtomicBool>,
+    /// Set once the first connection attempt has finished, whether it
+    /// succeeded or failed.
+    pub(crate) attempted: Arc<AtomicBool>,
 }
 
 /// The set of job servers a `Client` routes submissions across: round-robin
@@ -37,6 +40,12 @@ impl ServerPool {
 
     pub(crate) fn any_healthy(&self) -> bool {
         (0..self.servers.len()).any(|idx| self.is_healthy(idx))
+    }
+
+    pub(crate) fn all_attempted(&self) -> bool {
+        self.servers
+            .iter()
+            .all(|s| s.attempted.load(Ordering::Relaxed))
     }
 
     /// Picks the server for a job submission: by `unique` on the ketama ring

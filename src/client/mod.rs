@@ -98,7 +98,11 @@ impl ClientBuilder {
     }
 
     /// Spawns one persistent connection per server and waits (up to 5s) for
-    /// at least one to come up before returning.
+    /// at least one to come up before returning. With
+    /// [`ServerSelection::ByUnique`] it also waits, within the same 5s,
+    /// until every server has finished its first connection attempt, so
+    /// early submissions aren't routed away from a server that is merely
+    /// still connecting.
     pub async fn connect(self) -> Result<Client> {
         if self.servers.is_empty() {
             return Err(GearmanError::NoServersAvailable);
@@ -108,14 +112,20 @@ impl ClientBuilder {
         for addr in &self.servers {
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
             let connected = Arc::new(AtomicBool::new(false));
+            let attempted = Arc::new(AtomicBool::new(false));
             tokio::spawn(run_server_actor(
                 addr.clone(),
                 cmd_rx,
                 connected.clone(),
+                attempted.clone(),
                 self.with_exceptions,
                 self.transport.clone(),
             ));
-            slots.push(ServerSlot { cmd_tx, connected });
+            slots.push(ServerSlot {
+                cmd_tx,
+                connected,
+                attempted,
+            });
         }
         let ring = match self.selection {
             ServerSelection::RoundRobin => None,
@@ -123,9 +133,16 @@ impl ClientBuilder {
         };
         let pool = Arc::new(ServerPool::new(slots, ring));
 
+        // Under ByUnique, a server still connecting looks down, so its
+        // uniques would go to the fail-over server and then, once it is up,
+        // to it - two jobs for one unique id without any server failing.
+        let wait_for_all = self.selection == ServerSelection::ByUnique;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !pool.any_healthy() {
+        while !pool.any_healthy() || (wait_for_all && !pool.all_attempted()) {
             if tokio::time::Instant::now() >= deadline {
+                if pool.any_healthy() {
+                    break;
+                }
                 return Err(GearmanError::NoServersAvailable);
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -409,6 +426,7 @@ async fn run_server_actor(
     addr: String,
     mut cmd_rx: mpsc::UnboundedReceiver<ClientCommand>,
     connected: Arc<AtomicBool>,
+    attempted: Arc<AtomicBool>,
     with_exceptions: bool,
     transport: Transport,
 ) {
@@ -437,6 +455,7 @@ async fn run_server_actor(
 
                 if ready {
                     connected.store(true, Ordering::Relaxed);
+                    attempted.store(true, Ordering::Relaxed);
                     backoff = Duration::from_millis(100);
 
                     let outcome = actor_loop(&mut conn, &mut cmd_rx).await;
@@ -451,6 +470,10 @@ async fn run_server_actor(
                 tracing::warn!(server = %addr, error = %e, "failed to connect to job server");
             }
         }
+        // Covers a failed connect or handshake. A successful attempt set it
+        // before entering actor_loop, so after a dropped connection this is
+        // a no-op.
+        attempted.store(true, Ordering::Relaxed);
 
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
