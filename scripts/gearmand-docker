@@ -33,7 +33,11 @@ script_pid=$$
 ) </dev/null >/dev/null 2>&1 &
 
 # Covers the catchable exits too (Ctrl-C, SIGTERM, gearmand exiting).
-trap 'docker rm -f "$name" >/dev/null 2>&1' EXIT
+# Best-effort and status-preserving: after a normal exit --rm has already
+# removed the container, and older Docker versions fail `rm -f` on a
+# missing container, which under `set -e` would replace gearmand's own
+# exit status with 1.
+trap 'status=$?; docker rm -f "$name" >/dev/null 2>&1 || true; exit "$status"' EXIT
 
 # --network host: the harness picks an ephemeral port and expects it
 #   reachable at 127.0.0.1:<port>, same as a natively spawned process.
