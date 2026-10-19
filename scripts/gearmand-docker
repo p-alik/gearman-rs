@@ -17,15 +17,35 @@ set -euo pipefail
 # this once it does. Override with GEARMAND_IMAGE to try another one.
 image="${GEARMAND_IMAGE:-artefactual/gearmand:2.1.0}"
 
+# A unique name lets this script remove exactly its own container.
+name="gearman-rs-test-$$-${RANDOM}"
+
+# The docker CLI is only a client: killing it leaves the container running
+# (--rm only applies once the container exits). GearmandProcess::drop
+# SIGKILLs this script, which no trap can catch, so a detached watcher
+# removes the container as soon as this script is gone. Its stdio is
+# closed so it doesn't hold the test harness's pipes open.
+script_pid=$$
+(
+  trap '' HUP INT TERM
+  while kill -0 "$script_pid" 2>/dev/null; do sleep 0.2; done
+  docker rm -f "$name" >/dev/null 2>&1
+) </dev/null >/dev/null 2>&1 &
+
+# Covers the catchable exits too (Ctrl-C, SIGTERM, gearmand exiting).
+trap 'docker rm -f "$name" >/dev/null 2>&1' EXIT
+
 # --network host: the harness picks an ephemeral port and expects it
 #   reachable at 127.0.0.1:<port>, same as a natively spawned process.
 # --user: matches the host UID so gearmand can read the 0600
 #   tests/tls_fixtures/key.pem bind-mounted in from the host.
 # --entrypoint gearmand: skips the image's own entrypoint script, which
 #   needs root to write /etc/gearmand.conf and would fail under --user.
-exec docker run --rm \
+docker run --rm \
+  --name "$name" \
   --network host \
   --user "$(id -u):$(id -g)" \
   --entrypoint gearmand \
   -v "$PWD:$PWD" \
-  "$image" "$@"
+  "$image" "$@" &
+wait $!

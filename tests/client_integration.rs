@@ -188,7 +188,8 @@ async fn server_selection_by_unique_fails_over_when_a_server_is_down() {
 
     // Stop one server: uniques it owned must fail over consistently to
     // the next one on the ring instead of failing.
-    drop(servers.remove(0));
+    servers.remove(0).stop();
+    // Give the client's connection actor time to notice the closed socket.
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     assert_uniques_coalesce(&client).await;
