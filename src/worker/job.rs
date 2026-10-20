@@ -10,6 +10,8 @@ use crate::net::BoxedStream;
 use crate::protocol::{Packet, PacketType};
 use crate::Connection;
 
+/// A worker connection, shared between its grab loop and the `Reporter`s
+/// of the jobs it runs.
 pub(crate) type SharedConnection = Arc<Mutex<Connection<BoxedStream>>>;
 
 /// Why a handler failed. The wire protocol only lets `WORK_FAIL` carry a
@@ -53,7 +55,10 @@ pub struct WorkerJob {
 /// handler for the whole time a `Reporter` might be used.
 #[derive(Clone)]
 pub struct Reporter {
+    /// The handle of the job being reported on.
     pub(crate) handle: String,
+    /// The connection the job was grabbed on, where its `WORK_*` packets
+    /// must go.
     pub(crate) conn: SharedConnection,
 }
 

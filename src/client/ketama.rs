@@ -14,6 +14,8 @@ const REPLICAS_PER_SERVER: u32 = 4;
 /// given without one (or with port 0).
 const DEFAULT_PORT: u16 = 4730;
 
+/// A ketama consistent-hash ring over a client's server list, built once at
+/// connect time.
 pub(crate) struct Ring {
     /// `(point, server index)`, sorted by point.
     points: Vec<(u32, usize)>,

@@ -388,16 +388,24 @@ fn submit_packet_type(priority: Priority, background: bool) -> PacketType {
     }
 }
 
+/// A request from a `Client` handle to the server actor owning one
+/// connection (`run_server_actor`). Each carries a oneshot for the reply
+/// the actor matches to it.
 pub(crate) enum ClientCommand {
+    /// A `SUBMIT_JOB*` packet, answered with the handle from `JOB_CREATED`.
+    /// `events` is `Some` for foreground jobs, which receive `WORK_*`
+    /// events.
     Submit {
         packet: Packet,
         reply: oneshot::Sender<Result<String>>,
         events: Option<mpsc::UnboundedSender<JobEvent>>,
     },
+    /// A `GET_STATUS` packet, answered by `STATUS_RES`.
     Status {
         packet: Packet,
         reply: oneshot::Sender<Result<JobStatus>>,
     },
+    /// A `GET_STATUS_UNIQUE` packet, answered by `STATUS_RES_UNIQUE`.
     StatusUnique {
         packet: Packet,
         reply: oneshot::Sender<Result<JobStatus>>,

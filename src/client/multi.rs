@@ -6,8 +6,11 @@ use tokio::sync::mpsc;
 use crate::client::ketama::Ring;
 use crate::client::ClientCommand;
 
+/// One configured job server, as seen from the `Client` side.
 pub(crate) struct ServerSlot {
+    /// Sends requests to the server's actor (`run_server_actor`).
     pub(crate) cmd_tx: mpsc::UnboundedSender<ClientCommand>,
+    /// Whether the actor currently has a live, handshaken connection.
     pub(crate) connected: Arc<AtomicBool>,
     /// Set once the first connection attempt has finished, whether it
     /// succeeded or failed.
@@ -26,6 +29,7 @@ pub(crate) struct ServerPool {
 }
 
 impl ServerPool {
+    /// Builds the pool; `ring` is `Some` for `ServerSelection::ByUnique`.
     pub(crate) fn new(servers: Vec<ServerSlot>, ring: Option<Ring>) -> Self {
         Self {
             servers,
@@ -34,14 +38,19 @@ impl ServerPool {
         }
     }
 
+    /// The slot at `index`, e.g. a `JobHandle`'s issuing server. Panics if
+    /// out of range, which only a handle from another `Client` could cause.
     pub(crate) fn get(&self, index: usize) -> &ServerSlot {
         &self.servers[index]
     }
 
+    /// Whether at least one server is currently connected.
     pub(crate) fn any_healthy(&self) -> bool {
         (0..self.servers.len()).any(|idx| self.is_healthy(idx))
     }
 
+    /// Whether every server has finished its first connection attempt,
+    /// successfully or not.
     pub(crate) fn all_attempted(&self) -> bool {
         self.servers
             .iter()

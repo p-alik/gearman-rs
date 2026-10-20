@@ -66,6 +66,8 @@ impl Packet {
         self.args.last()
     }
 
+    /// Length of the payload on the wire: the arguments plus the NUL
+    /// separators between them, as written to the header's size field.
     pub(crate) fn encoded_body_len(&self) -> usize {
         let separators = self.args.len().saturating_sub(1);
         self.args.iter().map(|a| a.len()).sum::<usize>() + separators
