@@ -545,7 +545,10 @@ impl HandleSubscribers {
             self.cursor = 0;
         }
         let slot = if terminal {
-            self.slots.remove(self.cursor)
+            // The copies of one terminal event are identical and retire
+            // every slot, so order no longer matters: swap_remove keeps
+            // completing a job with N coalesced submissions O(N), not O(N^2).
+            self.slots.swap_remove(self.cursor)
         } else {
             self.cursor += 1;
             self.slots[self.cursor - 1].clone()
