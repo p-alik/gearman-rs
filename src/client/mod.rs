@@ -41,6 +41,36 @@ pub enum ServerSelection {
     /// as given, not its resolved address), picks the same server. If that
     /// server is down, the next one in ring order is used. Submissions
     /// without a unique id, or with an empty one, fall back to round-robin.
+    ///
+    /// ```no_run
+    /// use bytes::Bytes;
+    /// use gearman::client::{ClientBuilder, ServerSelection, SubmitOptions};
+    ///
+    /// # async fn example() -> gearman::Result<()> {
+    /// // List the servers exactly as C clients do: the ring hashes the
+    /// // strings, so `localhost:4730` and `127.0.0.1:4730` differ.
+    /// let client = ClientBuilder::new()
+    ///     .servers(["gearman1:4730", "gearman2:4730", "gearman3:4730"])
+    ///     .server_selection(ServerSelection::ByUnique)
+    ///     .connect()
+    ///     .await?;
+    ///
+    /// // Both submissions hash to the same server, which coalesces them
+    /// // into one job: the second gets the first one's handle back.
+    /// let submit = || {
+    ///     client.submit(
+    ///         "resize",
+    ///         Some("image-42"),
+    ///         Bytes::from_static(b"..."),
+    ///         SubmitOptions::background(),
+    ///     )
+    /// };
+    /// let first = submit().await?;
+    /// let second = submit().await?;
+    /// assert_eq!(first.handle, second.handle);
+    /// # Ok(())
+    /// # }
+    /// ```
     ByUnique,
 }
 
