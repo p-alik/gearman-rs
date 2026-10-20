@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-20
+
 ### Added
 
 - `ClientBuilder::server_selection(ServerSelection::ByUnique)`: route each
@@ -33,13 +35,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Breaking:** `AdminClient::show_unique_jobs()` now returns
   `Vec<UniqueJobEntry>` instead of `Vec<String>`. gearmand 2.2.0 changed
   each `show unique jobs` line to `<job handle>\t<unique>`, so the raw
-  lines no longer were bare unique ids. `UniqueJobEntry::handle` is the
+  lines were no longer bare unique ids. `UniqueJobEntry::handle` is the
   handle `cancel_job` expects, or `None` against a gearmand older than
   2.2.0, which reports only the unique id.
 - CI builds and tests against gearmand 2.2.0 (was 2.1.0).
 - `scripts/gearmand-docker` pins the `artefactual/gearmand` image tag
   (2.1.0 until a 2.2.0 image is published) and accepts a
-  `GEARMAND_IMAGE` override.
+  `GEARMAND_IMAGE` override. It also removes its container when the test
+  fixture kills it; previously every integration test run through it
+  left a gearmand container running.
 
 ## [0.1.2] - 2026-09-21
 
