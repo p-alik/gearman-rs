@@ -5,7 +5,7 @@
 mod common;
 
 use bytes::Bytes;
-use gearman::client::ClientBuilder;
+use gearman::client::{ClientBuilder, ServerSelection};
 
 #[tokio::test]
 async fn submit_bg_and_get_status_roundtrip() {
@@ -122,4 +122,74 @@ async fn submit_epoch_roundtrip() {
         .expect("get_status should succeed");
     assert!(status.known);
     assert!(!status.running);
+}
+
+/// Submits two background jobs per unique id and asserts each pair got the
+/// same handle, i.e. both reached the same server and gearmand coalesced
+/// them.
+async fn assert_uniques_coalesce(client: &gearman::client::Client) {
+    for i in 0..20 {
+        let unique = format!("by-unique-{i}");
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let submitted = client
+                .submit(
+                    "reverse",
+                    Some(&unique),
+                    Bytes::from_static(b"test"),
+                    gearman::client::SubmitOptions::background(),
+                )
+                .await
+                .expect("background submit should succeed");
+            handles.push(submitted.handle);
+        }
+        // Compare the whole JobHandle, which includes the issuing server:
+        // handle strings are only unique per server, so two servers on one
+        // host can issue the same string for two separate jobs.
+        assert_eq!(handles[0], handles[1], "{unique}");
+    }
+}
+
+#[tokio::test]
+async fn server_selection_by_unique_coalesces_across_servers() {
+    let servers: Vec<_> = (0..3)
+        .filter_map(|_| common::GearmandProcess::start())
+        .collect();
+    if servers.len() < 3 {
+        return;
+    }
+
+    let client = ClientBuilder::new()
+        .servers(servers.iter().map(|g| g.addr.clone()))
+        .server_selection(ServerSelection::ByUnique)
+        .connect()
+        .await
+        .expect("client should connect");
+
+    assert_uniques_coalesce(&client).await;
+}
+
+#[tokio::test]
+async fn server_selection_by_unique_fails_over_when_a_server_is_down() {
+    let mut servers: Vec<_> = (0..3)
+        .filter_map(|_| common::GearmandProcess::start())
+        .collect();
+    if servers.len() < 3 {
+        return;
+    }
+
+    let client = ClientBuilder::new()
+        .servers(servers.iter().map(|g| g.addr.clone()))
+        .server_selection(ServerSelection::ByUnique)
+        .connect()
+        .await
+        .expect("client should connect");
+
+    // Stop one server: uniques it owned must fail over consistently to
+    // the next one on the ring instead of failing.
+    servers.remove(0).stop();
+    // Give the client's connection actor time to notice the closed socket.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    assert_uniques_coalesce(&client).await;
 }

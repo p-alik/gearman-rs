@@ -5,7 +5,7 @@ mod common;
 
 use bytes::Bytes;
 use gearman::admin::{AdminClient, MaxQueueSize};
-use gearman::client::ClientBuilder;
+use gearman::client::{ClientBuilder, SubmitOptions};
 use gearman::worker::{WorkError, WorkerBuilder, WorkerJob};
 
 async fn reverse(job: WorkerJob) -> Result<Bytes, WorkError> {
@@ -98,6 +98,52 @@ async fn show_jobs_and_cancel_job_roundtrip() {
         .cancel_job(handle.as_str())
         .await
         .expect("cancel job should succeed");
+}
+
+#[tokio::test]
+async fn show_unique_jobs_maps_unique_to_handle() {
+    let Some(gearmand) = common::GearmandProcess::start() else {
+        return;
+    };
+
+    let client = ClientBuilder::new()
+        .servers([gearmand.addr.clone()])
+        .connect()
+        .await
+        .expect("client should connect");
+
+    // No worker registered, so the job stays queued.
+    let submitted = client
+        .submit(
+            "reverse",
+            Some("admin-unique-1"),
+            Bytes::from_static(b"test"),
+            SubmitOptions::background(),
+        )
+        .await
+        .expect("background submit should succeed");
+
+    let mut admin = AdminClient::connect(&gearmand.addr)
+        .await
+        .expect("admin client should connect");
+
+    let entries = admin
+        .show_unique_jobs()
+        .await
+        .expect("show unique jobs should succeed");
+    let entry = entries
+        .iter()
+        .find(|e| e.unique == "admin-unique-1")
+        .unwrap_or_else(|| panic!("submitted unique id missing from {entries:?}"));
+    // gearmand < 2.2.0 reports no handle; when one is reported it must be
+    // the one cancel_job expects.
+    if let Some(handle) = &entry.handle {
+        assert_eq!(handle, submitted.handle.as_str());
+        admin
+            .cancel_job(handle)
+            .await
+            .expect("cancel job by reported handle should succeed");
+    }
 }
 
 #[tokio::test]

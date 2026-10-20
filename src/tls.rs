@@ -25,6 +25,7 @@ use crate::error::{GearmanError, Result};
 /// `rustls::ClientConfig`.
 #[derive(Clone)]
 pub struct TlsConfig {
+    /// Built from the caller's `rustls::ClientConfig`.
     #[allow(dead_code)]
     pub(crate) connector: TlsConnector,
 }

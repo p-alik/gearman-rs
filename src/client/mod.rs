@@ -2,6 +2,7 @@
 //! tracking their progress. See [`Client`] and [`ClientBuilder`].
 
 mod job;
+mod ketama;
 mod multi;
 
 pub use job::{
@@ -22,13 +23,63 @@ use crate::net::{BoxedStream, Transport};
 use crate::protocol::{Packet, PacketType};
 use crate::Connection;
 
+use ketama::Ring;
 use multi::{ServerPool, ServerSlot};
+
+/// How a [`Client`] with several servers picks one for each job submission.
+/// Status queries always go to the server that created the job.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServerSelection {
+    /// Rotate through the healthy servers (the default).
+    #[default]
+    RoundRobin,
+    /// Hash the job's unique id onto a ketama consistent-hash ring built
+    /// from the server list, so submissions sharing a unique id land on the
+    /// same server and gearmand can coalesce them. Matches libgearman's
+    /// `gearman_client_set_server_selection_by_unique()` (gearmand 2.2.0+):
+    /// a C client with the same server list, written the same way (the host
+    /// as given, not its resolved address), picks the same server. If that
+    /// server is down, the next one in ring order is used. Submissions
+    /// without a unique id, or with an empty one, fall back to round-robin.
+    ///
+    /// ```no_run
+    /// use bytes::Bytes;
+    /// use gearman::client::{ClientBuilder, ServerSelection, SubmitOptions};
+    ///
+    /// # async fn example() -> gearman::Result<()> {
+    /// // List the servers exactly as C clients do: the ring hashes the
+    /// // strings, so `localhost:4730` and `127.0.0.1:4730` differ.
+    /// let client = ClientBuilder::new()
+    ///     .servers(["gearman1:4730", "gearman2:4730", "gearman3:4730"])
+    ///     .server_selection(ServerSelection::ByUnique)
+    ///     .connect()
+    ///     .await?;
+    ///
+    /// // Both submissions hash to the same server, which coalesces them
+    /// // into one job: the second gets the first one's handle back.
+    /// let submit = || {
+    ///     client.submit(
+    ///         "resize",
+    ///         Some("image-42"),
+    ///         Bytes::from_static(b"..."),
+    ///         SubmitOptions::background(),
+    ///     )
+    /// };
+    /// let first = submit().await?;
+    /// let second = submit().await?;
+    /// assert_eq!(first.handle, second.handle);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ByUnique,
+}
 
 /// Builds a [`Client`], configuring which servers it connects to and how.
 pub struct ClientBuilder {
     servers: Vec<String>,
     with_exceptions: bool,
     transport: Transport,
+    selection: ServerSelection,
 }
 
 impl ClientBuilder {
@@ -39,6 +90,7 @@ impl ClientBuilder {
             servers: Vec::new(),
             with_exceptions: false,
             transport: Transport::default(),
+            selection: ServerSelection::default(),
         }
     }
 
@@ -60,6 +112,13 @@ impl ClientBuilder {
         self
     }
 
+    /// Sets how a server is picked for each job submission; see
+    /// [`ServerSelection`].
+    pub fn server_selection(mut self, selection: ServerSelection) -> Self {
+        self.selection = selection;
+        self
+    }
+
     /// Connect to every server over TLS instead of plain TCP. gearmand
     /// wraps the raw stream in TLS before any Gearman framing begins.
     #[cfg(feature = "tls")]
@@ -69,7 +128,11 @@ impl ClientBuilder {
     }
 
     /// Spawns one persistent connection per server and waits (up to 5s) for
-    /// at least one to come up before returning.
+    /// at least one to come up before returning. With
+    /// [`ServerSelection::ByUnique`] it also waits, within the same 5s,
+    /// until every server has finished its first connection attempt, so
+    /// early submissions aren't routed away from a server that is merely
+    /// still connecting.
     pub async fn connect(self) -> Result<Client> {
         if self.servers.is_empty() {
             return Err(GearmanError::NoServersAvailable);
@@ -79,20 +142,37 @@ impl ClientBuilder {
         for addr in &self.servers {
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
             let connected = Arc::new(AtomicBool::new(false));
+            let attempted = Arc::new(AtomicBool::new(false));
             tokio::spawn(run_server_actor(
                 addr.clone(),
                 cmd_rx,
                 connected.clone(),
+                attempted.clone(),
                 self.with_exceptions,
                 self.transport.clone(),
             ));
-            slots.push(ServerSlot { cmd_tx, connected });
+            slots.push(ServerSlot {
+                cmd_tx,
+                connected,
+                attempted,
+            });
         }
-        let pool = Arc::new(ServerPool::new(slots));
+        let ring = match self.selection {
+            ServerSelection::RoundRobin => None,
+            ServerSelection::ByUnique => Some(Ring::new(&self.servers)),
+        };
+        let pool = Arc::new(ServerPool::new(slots, ring));
 
+        // Under ByUnique, a server still connecting looks down, so its
+        // uniques would go to the fail-over server and then, once it is up,
+        // to it - two jobs for one unique id without any server failing.
+        let wait_for_all = self.selection == ServerSelection::ByUnique;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !pool.any_healthy() {
+        while !pool.any_healthy() || (wait_for_all && !pool.all_attempted()) {
             if tokio::time::Instant::now() >= deadline {
+                if pool.any_healthy() {
+                    break;
+                }
                 return Err(GearmanError::NoServersAvailable);
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -202,7 +282,7 @@ impl Client {
     ) -> Result<SubmittedJob> {
         let server_index = self
             .pool
-            .next_healthy()
+            .select_for_submit(unique)
             .ok_or(GearmanError::NoServersAvailable)?;
         let slot = self.pool.get(server_index);
 
@@ -338,16 +418,24 @@ fn submit_packet_type(priority: Priority, background: bool) -> PacketType {
     }
 }
 
+/// A request from a `Client` handle to the server actor owning one
+/// connection (`run_server_actor`). Each carries a oneshot for the reply
+/// the actor matches to it.
 pub(crate) enum ClientCommand {
+    /// A `SUBMIT_JOB*` packet, answered with the handle from `JOB_CREATED`.
+    /// `events` is `Some` for foreground jobs, which receive `WORK_*`
+    /// events.
     Submit {
         packet: Packet,
         reply: oneshot::Sender<Result<String>>,
         events: Option<mpsc::UnboundedSender<JobEvent>>,
     },
+    /// A `GET_STATUS` packet, answered by `STATUS_RES`.
     Status {
         packet: Packet,
         reply: oneshot::Sender<Result<JobStatus>>,
     },
+    /// A `GET_STATUS_UNIQUE` packet, answered by `STATUS_RES_UNIQUE`.
     StatusUnique {
         packet: Packet,
         reply: oneshot::Sender<Result<JobStatus>>,
@@ -376,6 +464,7 @@ async fn run_server_actor(
     addr: String,
     mut cmd_rx: mpsc::UnboundedReceiver<ClientCommand>,
     connected: Arc<AtomicBool>,
+    attempted: Arc<AtomicBool>,
     with_exceptions: bool,
     transport: Transport,
 ) {
@@ -404,6 +493,7 @@ async fn run_server_actor(
 
                 if ready {
                     connected.store(true, Ordering::Relaxed);
+                    attempted.store(true, Ordering::Relaxed);
                     backoff = Duration::from_millis(100);
 
                     let outcome = actor_loop(&mut conn, &mut cmd_rx).await;
@@ -418,6 +508,10 @@ async fn run_server_actor(
                 tracing::warn!(server = %addr, error = %e, "failed to connect to job server");
             }
         }
+        // Covers a failed connect or handshake. A successful attempt set it
+        // before entering actor_loop, so after a dropped connection this is
+        // a no-op.
+        attempted.store(true, Ordering::Relaxed);
 
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
@@ -451,10 +545,80 @@ async fn negotiate_exceptions(conn: &mut Connection<BoxedStream>) -> Result<bool
     }
 }
 
-/// How often to sweep `job_events` for entries whose `JobEventStream` was
-/// dropped without the job ever reaching a terminal state on this
-/// connection (e.g. the caller timed out waiting) — otherwise those entries
-/// and their senders live for the life of the connection.
+/// Event subscribers per job handle on one connection.
+type JobEventSubscribers = HashMap<String, HandleSubscribers>;
+
+/// The foreground submissions sharing one job handle. gearmand coalesces
+/// submissions with the same unique id into one job and answers each with
+/// the same handle, but registers each as its own client of the job: every
+/// `WORK_*` packet is sent once per registration, those copies queued back
+/// to back (`_server_queue_work_data` in gearmand's `server.cc`). So each
+/// copy goes to the next subscriber in turn, and every subscriber sees each
+/// event exactly once. Subscribers are added on `JOB_CREATED`, which never
+/// lands between the copies of one event, so `cursor` is back at 0 then.
+///
+/// `slots` mirrors gearmand's registrations, one per `JOB_CREATED`, and a
+/// slot lives exactly as long as gearmand keeps the registration: until
+/// its terminal event, or until the connection closes. A slot whose
+/// `JobEventStream` was dropped is kept as `None` rather than removed, or
+/// the copies sent for it would land on the wrong subscriber.
+#[derive(Default)]
+struct HandleSubscribers {
+    slots: Vec<Option<mpsc::UnboundedSender<JobEvent>>>,
+    cursor: usize,
+}
+
+impl HandleSubscribers {
+    fn add(&mut self, sender: mpsc::UnboundedSender<JobEvent>) {
+        self.slots.push(Some(sender));
+    }
+
+    /// Delivers one wire copy of an event. Returns whether slots remain;
+    /// a terminal event retires the slot it went to.
+    fn deliver(&mut self, event: JobEvent, terminal: bool) -> bool {
+        if self.slots.is_empty() {
+            return false;
+        }
+        if self.cursor >= self.slots.len() {
+            self.cursor = 0;
+        }
+        let slot = if terminal {
+            // The copies of one terminal event are identical and retire
+            // every slot, so order no longer matters: swap_remove keeps
+            // completing a job with N coalesced submissions O(N), not O(N^2).
+            self.slots.swap_remove(self.cursor)
+        } else {
+            self.cursor += 1;
+            self.slots[self.cursor - 1].clone()
+        };
+        if let Some(sender) = slot {
+            let _ = sender.send(event);
+        }
+        if self.cursor >= self.slots.len() {
+            self.cursor = 0;
+        }
+        !self.slots.is_empty()
+    }
+}
+
+/// Releases the channels of subscribers whose `JobEventStream` is gone,
+/// keeping their slots: gearmand keeps sending copies for those
+/// registrations until the job ends, whether or not anyone still listens,
+/// and a later submission joining the job must not be handed them.
+fn prune_closed_subscribers(job_events: &mut JobEventSubscribers) {
+    for subs in job_events.values_mut() {
+        for slot in &mut subs.slots {
+            if slot.as_ref().is_some_and(|sender| sender.is_closed()) {
+                *slot = None;
+            }
+        }
+    }
+}
+
+/// How often to release the channels of `JobEventStream`s that were
+/// dropped before their job reached a terminal state on this connection
+/// (e.g. the caller timed out waiting). Their slots stay until the job
+/// ends, as gearmand's registrations do.
 const JOB_EVENTS_PRUNE_INTERVAL: Duration = Duration::from_secs(30);
 
 async fn actor_loop(
@@ -462,14 +626,14 @@ async fn actor_loop(
     cmd_rx: &mut mpsc::UnboundedReceiver<ClientCommand>,
 ) -> ActorOutcome {
     let mut pending_replies: VecDeque<PendingReply> = VecDeque::new();
-    let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> = HashMap::new();
+    let mut job_events = JobEventSubscribers::new();
     let mut prune_interval = tokio::time::interval(JOB_EVENTS_PRUNE_INTERVAL);
     prune_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let outcome = loop {
         tokio::select! {
             _ = prune_interval.tick() => {
-                job_events.retain(|_, sender| !sender.is_closed());
+                prune_closed_subscribers(&mut job_events);
             }
             cmd = cmd_rx.recv() => {
                 match cmd {
@@ -528,14 +692,14 @@ fn fail_all_pending(pending_replies: VecDeque<PendingReply>) {
 fn handle_incoming(
     packet: Packet,
     pending_replies: &mut VecDeque<PendingReply>,
-    job_events: &mut HashMap<String, mpsc::UnboundedSender<JobEvent>>,
+    job_events: &mut JobEventSubscribers,
 ) {
     match packet.ptype {
         PacketType::JobCreated => match pending_replies.pop_front() {
             Some(PendingReply::JobCreated { reply, events }) => {
                 let handle = packet.arg_str(0).unwrap_or_default().to_string();
                 if let Some(sender) = events {
-                    job_events.insert(handle.clone(), sender);
+                    job_events.entry(handle.clone()).or_default().add(sender);
                 }
                 let _ = reply.send(Ok(handle));
             }
@@ -584,10 +748,7 @@ fn handle_incoming(
     }
 }
 
-fn dispatch_work_event(
-    packet: Packet,
-    job_events: &mut HashMap<String, mpsc::UnboundedSender<JobEvent>>,
-) {
+fn dispatch_work_event(packet: Packet, job_events: &mut JobEventSubscribers) {
     let Some(handle) = packet.arg_str(0).map(str::to_string) else {
         return;
     };
@@ -619,11 +780,10 @@ fn dispatch_work_event(
         _ => unreachable!("filtered by caller"),
     };
 
-    if let Some(sender) = job_events.get(&handle) {
-        let _ = sender.send(event);
-    }
-    if terminal {
-        job_events.remove(&handle);
+    if let Some(subs) = job_events.get_mut(&handle) {
+        if !subs.deliver(event, terminal) {
+            job_events.remove(&handle);
+        }
     }
 }
 
@@ -651,28 +811,146 @@ fn parse_status_res_unique(packet: &Packet) -> JobStatus {
 mod tests {
     use super::*;
 
-    /// Unit-tests the exact `retain` call `actor_loop`'s periodic sweep
-    /// runs (see `JOB_EVENTS_PRUNE_INTERVAL`), in isolation from the timer
-    /// that drives it — waiting out the real 30s interval in an integration
-    /// test would be both slow and not actually exercise different logic
-    /// than this. A caller dropping its `JobEventStream` early (e.g. via a
-    /// timeout) before the job reaches a terminal state closes the
-    /// channel's receiver; the sender must be pruned on the next sweep
-    /// rather than living for the rest of the connection.
+    /// Unit-tests the sweep `actor_loop` runs every
+    /// `JOB_EVENTS_PRUNE_INTERVAL`, in isolation from the timer that drives
+    /// it — waiting out the real 30s interval in an integration test would
+    /// be both slow and not actually exercise different logic than this. A
+    /// caller dropping its `JobEventStream` early (e.g. via a timeout)
+    /// closes the channel's receiver; the sweep releases the sender but
+    /// keeps the slot, since gearmand keeps that registration.
     #[test]
-    fn closed_job_event_senders_get_pruned() {
-        let mut job_events: HashMap<String, mpsc::UnboundedSender<JobEvent>> = HashMap::new();
+    fn closed_job_event_senders_get_released_but_keep_their_slot() {
+        let mut job_events = JobEventSubscribers::new();
 
         let (still_open_tx, _still_open_rx) = mpsc::unbounded_channel();
-        job_events.insert("H:open:1".to_string(), still_open_tx);
+        job_events
+            .entry("H:open:1".to_string())
+            .or_default()
+            .add(still_open_tx);
 
         let (dropped_tx, dropped_rx) = mpsc::unbounded_channel();
-        job_events.insert("H:dropped:1".to_string(), dropped_tx);
+        job_events
+            .entry("H:dropped:1".to_string())
+            .or_default()
+            .add(dropped_tx);
         drop(dropped_rx); // simulates an early-dropped JobEventStream
 
-        job_events.retain(|_, sender| !sender.is_closed());
+        prune_closed_subscribers(&mut job_events);
 
-        assert!(job_events.contains_key("H:open:1"));
-        assert!(!job_events.contains_key("H:dropped:1"));
+        assert!(job_events["H:open:1"].slots[0].is_some());
+        assert_eq!(job_events["H:dropped:1"].slots.len(), 1);
+        assert!(job_events["H:dropped:1"].slots[0].is_none());
+    }
+
+    /// Regression test: the sweep used to remove a handle once all its
+    /// streams were closed. A later submission joining the still-running
+    /// job then got a fresh entry with one slot, while gearmand kept
+    /// sending a copy for the dropped registration too - so the new caller
+    /// received every event twice.
+    #[test]
+    fn rejoining_after_all_streams_dropped_gets_each_event_once() {
+        let mut job_events = JobEventSubscribers::new();
+        let (tx_a, rx_a) = mpsc::unbounded_channel();
+        job_events.entry("H:t:1".to_string()).or_default().add(tx_a);
+        drop(rx_a);
+        prune_closed_subscribers(&mut job_events);
+
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        job_events.entry("H:t:1".to_string()).or_default().add(tx_b);
+        for (ptype, data) in [
+            (PacketType::WorkData, &b"chunk"[..]),
+            (PacketType::WorkComplete, b"done"),
+        ] {
+            for _ in 0..2 {
+                dispatch_work_event(work_packet(ptype, data), &mut job_events);
+            }
+        }
+
+        let mut events = Vec::new();
+        while let Ok(event) = rx_b.try_recv() {
+            events.push(event);
+        }
+        assert!(
+            matches!(
+                events.as_slice(),
+                [JobEvent::Data(d), JobEvent::Complete(c)] if d == "chunk" && c == "done"
+            ),
+            "unexpected events: {events:?}"
+        );
+        assert!(job_events.is_empty(), "terminal copies retire both slots");
+    }
+
+    fn work_packet(ptype: PacketType, data: &'static [u8]) -> Packet {
+        Packet::response(
+            ptype,
+            vec![Bytes::from_static(b"H:t:1"), Bytes::from_static(data)],
+        )
+    }
+
+    /// gearmand sends each event once per coalesced submission, back to
+    /// back; each subscriber must get exactly one copy of each event.
+    #[test]
+    fn coalesced_job_copies_go_one_per_subscriber() {
+        let mut job_events = JobEventSubscribers::new();
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        let subs = job_events.entry("H:t:1".to_string()).or_default();
+        subs.add(tx_a);
+        subs.add(tx_b);
+
+        for (ptype, data) in [
+            (PacketType::WorkData, &b"one"[..]),
+            (PacketType::WorkData, b"two"),
+            (PacketType::WorkComplete, b"done"),
+        ] {
+            for _ in 0..2 {
+                dispatch_work_event(work_packet(ptype, data), &mut job_events);
+            }
+        }
+
+        assert!(
+            job_events.is_empty(),
+            "terminal copies retire every subscriber"
+        );
+        for rx in [&mut rx_a, &mut rx_b] {
+            let mut events = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+            assert!(
+                matches!(
+                    events.as_slice(),
+                    [JobEvent::Data(a), JobEvent::Data(b), JobEvent::Complete(c)]
+                        if a == "one" && b == "two" && c == "done"
+                ),
+                "unexpected events: {events:?}"
+            );
+        }
+    }
+
+    /// A submission joining a running job is only sent copies of later
+    /// events; the earlier subscriber keeps getting one copy of each.
+    #[test]
+    fn subscriber_joining_mid_job_gets_only_later_events() {
+        let mut job_events = JobEventSubscribers::new();
+        let (tx_a, mut rx_a) = mpsc::unbounded_channel();
+        let (tx_b, mut rx_b) = mpsc::unbounded_channel();
+        job_events.entry("H:t:1".to_string()).or_default().add(tx_a);
+
+        dispatch_work_event(work_packet(PacketType::WorkData, b"early"), &mut job_events);
+        job_events.get_mut("H:t:1").unwrap().add(tx_b);
+        for _ in 0..2 {
+            dispatch_work_event(work_packet(PacketType::WorkData, b"late"), &mut job_events);
+        }
+
+        let drain = |rx: &mut mpsc::UnboundedReceiver<JobEvent>| {
+            let mut data = Vec::new();
+            while let Ok(JobEvent::Data(d)) = rx.try_recv() {
+                data.push(d);
+            }
+            data
+        };
+        assert_eq!(drain(&mut rx_a), vec!["early", "late"]);
+        assert_eq!(drain(&mut rx_b), vec!["late"]);
     }
 }

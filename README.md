@@ -16,6 +16,7 @@ implemented so far.
 |---|---|
 | Wire codec (framing, packet types, args) | done |
 | Client: submit / status | done |
+| Client: server selection by unique id (ketama, matches libgearman 2.2.0) | done |
 | Worker: register / grab / respond | done |
 | Admin text protocol | done |
 | TLS | done |
@@ -76,6 +77,9 @@ Docker:
 ```sh
 GEARMAND_BIN=$PWD/scripts/gearmand-docker cargo test --all-features
 ```
+
+The image tag is pinned in the script; set `GEARMAND_IMAGE` (e.g.
+`GEARMAND_IMAGE=artefactual/gearmand:latest`) to test against another one.
 
 ## License
 

@@ -65,8 +65,13 @@ impl SubmitOptions {
 /// server that created the job.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct JobHandle {
+    /// Index into the client's `ServerPool` of the server that issued the
+    /// handle, where follow-up status requests must go.
     pub(crate) server_index: usize,
+    /// The raw handle string from `JOB_CREATED`.
     pub(crate) handle: String,
+    /// The unique id the job was submitted with, if any; required by
+    /// `get_status_unique`.
     pub(crate) unique: Option<String>,
 }
 
@@ -109,6 +114,7 @@ pub enum JobEvent {
 
 /// A [`Stream`] of [`JobEvent`]s for a foreground job submission.
 pub struct JobEventStream {
+    /// Fed by the server actor that owns the job's connection.
     pub(crate) rx: mpsc::UnboundedReceiver<JobEvent>,
 }
 

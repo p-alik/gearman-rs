@@ -53,6 +53,25 @@ impl GearmandProcess {
     }
 }
 
+impl GearmandProcess {
+    /// Stops the server and waits until its port refuses connections, so a
+    /// test exercising a downed server knows it really is down. Killing
+    /// the spawned process isn't proof on its own: with
+    /// `scripts/gearmand-docker` the container is removed asynchronously.
+    pub fn stop(self) {
+        let addr = self.addr.clone();
+        drop(self);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while TcpStream::connect(&addr).is_ok() {
+            assert!(
+                Instant::now() < deadline,
+                "gearmand at {addr} still accepting connections after being stopped"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
 impl Drop for GearmandProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();

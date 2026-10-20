@@ -35,7 +35,7 @@ jobs:
           # this needs no bootstrap.sh/autoreconf either. Bump the
           # version below to track a newer gearmand release.
           mkdir gearmand-c
-          curl -sL https://github.com/gearman/gearmand/releases/download/2.1.0/gearmand-2.1.0.tar.gz | tar xz -C gearmand-c --strip-components=1
+          curl -sL https://github.com/gearman/gearmand/releases/download/2.2.0/gearmand-2.2.0.tar.gz | tar xz -C gearmand-c --strip-components=1
           # configmake.h is a BUILT_SOURCES target (Makefile.am):
           # upstream's own `all` rule depends on it and recurses into
           # `all-am` in a second, separate `make` invocation
@@ -63,6 +63,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Cargo.lock isn't committed, so dependencies float to their newest
+      # release, which may need a newer Rust than our MSRV (tokio-util
+      # 0.7.20 needs 1.85). Cargo 1.75 can't pick versions by MSRV, so
+      # resolve the lockfile with stable cargo's MSRV-aware resolver,
+      # which honours `rust-version` from Cargo.toml, then check with 1.75.
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo generate-lockfile
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
       - uses: dtolnay/rust-toolchain@1.75
       # Excludes `tls`: rustls's aws-lc-rs backend pulls in zeroize, whose
       # latest release needs edition2024 (Rust 1.85+) regardless of the
@@ -84,7 +93,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libboost-all-dev libevent-dev gperf libssl-dev uuid-dev
           mkdir gearmand-c
-          curl -sL https://github.com/gearman/gearmand/releases/download/2.1.0/gearmand-2.1.0.tar.gz | tar xz -C gearmand-c --strip-components=1
+          curl -sL https://github.com/gearman/gearmand/releases/download/2.2.0/gearmand-2.2.0.tar.gz | tar xz -C gearmand-c --strip-components=1
           # See the `test` job for why configmake.h needs building in
           # its own sequential step before the sub-target.
           cd gearmand-c && ./configure --enable-ssl && make configmake.h && make -j"$(nproc)" gearmand/gearmand

@@ -153,10 +153,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AdminClient<S> {
     }
 
     /// `show unique jobs`: every unique id the server is processing or
-    /// queuing.
-    pub async fn show_unique_jobs(&mut self) -> Result<Vec<String>> {
+    /// queuing, with its job handle when the server reports one (gearmand
+    /// 2.2.0+). See [`UniqueJobEntry`].
+    pub async fn show_unique_jobs(&mut self) -> Result<Vec<UniqueJobEntry>> {
         self.send_line("show unique jobs").await?;
-        self.read_dot_terminated().await
+        Ok(self
+            .read_dot_terminated()
+            .await?
+            .iter()
+            .map(|line| parse_unique_job_line(line))
+            .collect())
     }
 
     /// `cancel job <handle>`.
@@ -285,6 +291,17 @@ pub struct JobListEntry {
     pub queued: bool,
 }
 
+/// One row of a `show unique jobs` admin response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UniqueJobEntry {
+    /// The job handle, as accepted by [`AdminClient::cancel_job`]. `None`
+    /// when talking to a gearmand older than 2.2.0, which reports only the
+    /// unique id.
+    pub handle: Option<String>,
+    /// The job's unique id.
+    pub unique: String,
+}
+
 fn parse_ack_line(line: String) -> Result<Option<String>> {
     if let Some(rest) = line.strip_prefix("OK") {
         let rest = rest.trim_start();
@@ -369,6 +386,24 @@ fn parse_job_list_line(line: &str) -> Result<JobListEntry> {
         ignore_job,
         queued,
     })
+}
+
+/// `show unique jobs` line: `HANDLE\tUNIQUE` since gearmand 2.2.0, just
+/// `UNIQUE` before. Split on the *first* tab only: a handle never contains
+/// one, but a unique id may. The flip side is that a pre-2.2.0 unique id
+/// containing a tab is indistinguishable from the new layout and gets
+/// split too - unavoidable without knowing the server version.
+fn parse_unique_job_line(line: &str) -> UniqueJobEntry {
+    match line.split_once('\t') {
+        Some((handle, unique)) => UniqueJobEntry {
+            handle: Some(handle.to_string()),
+            unique: unique.to_string(),
+        },
+        None => UniqueJobEntry {
+            handle: None,
+            unique: line.to_string(),
+        },
+    }
 }
 
 /// `workers` line: `FD IP CLIENT_ID : FUNC1 FUNC2 ...` (functions may be
@@ -500,6 +535,27 @@ mod tests {
         assert_eq!(entry.retries, 0);
         assert!(entry.ignore_job);
         assert!(!entry.queued);
+    }
+
+    #[test]
+    fn parse_unique_job_line_with_handle() {
+        let entry = parse_unique_job_line("H:lap:1\tmy-unique");
+        assert_eq!(entry.handle.as_deref(), Some("H:lap:1"));
+        assert_eq!(entry.unique, "my-unique");
+    }
+
+    #[test]
+    fn parse_unique_job_line_unique_may_contain_tabs() {
+        let entry = parse_unique_job_line("H:lap:1\ta\tb");
+        assert_eq!(entry.handle.as_deref(), Some("H:lap:1"));
+        assert_eq!(entry.unique, "a\tb");
+    }
+
+    #[test]
+    fn parse_unique_job_line_pre_2_2_0_has_no_handle() {
+        let entry = parse_unique_job_line("my-unique");
+        assert_eq!(entry.handle, None);
+        assert_eq!(entry.unique, "my-unique");
     }
 
     #[test]
